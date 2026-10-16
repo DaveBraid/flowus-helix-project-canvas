@@ -171,6 +171,8 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   const revisionRef = useRef(null);
   const dirtyRef = useRef(false);
   const savingRef = useRef(false);
+  const savingTaskRef = useRef(null);
+  const exitingRef = useRef(false);
   const conflictRef = useRef(false);
   const layoutWarningRef = useRef(false);
   const loadingRef = useRef(false);
@@ -181,7 +183,9 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
 
   /** 保存当前节点位置；输入无，输出保存状态，冲突时停止覆盖。 */
   const save = useCallback(async () => {
-    if (!dirtyRef.current || savingRef.current || conflictRef.current || layoutWarningRef.current) return;
+    if (savingTaskRef.current) return savingTaskRef.current; // 退出操作等待同一个在途保存。
+    if (!dirtyRef.current || conflictRef.current || layoutWarningRef.current) return;
+    const task = (async () => {
     savingRef.current = true; setSaveState('正在保存布局');
     const version = versionRef.current;
     try {
@@ -198,6 +202,9 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
       savingRef.current = false;
       if (dirtyRef.current && !conflictRef.current && version !== versionRef.current) timerRef.current = setTimeout(save, 3000);
     }
+    })();
+    savingTaskRef.current = task;
+    try { await task; } finally { savingTaskRef.current = null; }
   }, [endpoint, session.csrfToken, onExpired]);
 
   /** 标记布局修改并延迟三秒保存；输入新节点，输出更新后的画布状态。 */
@@ -272,9 +279,11 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   /** 提醒关闭页面前仍有布局未保存；输入浏览器事件，输出退出确认。 */
   useEffect(() => {
     const beforeUnload = event => { if (dirtyRef.current) { event.preventDefault(); event.returnValue = ''; } };
+    const hidden = () => { if (document.hidden && dirtyRef.current) { clearTimeout(timerRef.current); void save(); } }; // 尽早尝试保存，宿主强制销毁仍无法保证完成。
     window.addEventListener('beforeunload', beforeUnload);
-    return () => window.removeEventListener('beforeunload', beforeUnload);
-  }, []);
+    document.addEventListener('visibilitychange', hidden);
+    return () => { window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('visibilitychange', hidden); };
+  }, [save]);
 
   /** 重新计算并保存全部节点坐标；输入无，输出排布状态。 */
   async function relayout() {
@@ -286,8 +295,15 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   }
   /** 清除服务器会话；输入无，输出登录页面或失败提示。 */
   async function logout() {
-    try { await request('/api/logout', { method: 'POST', headers: { 'X-CSRF-Token': session.csrfToken } }); onExpired(); }
-    catch { setNotice('退出失败，请重试。'); }
+    if (exitingRef.current) return;
+    exitingRef.current = true; setBusy(true); clearTimeout(timerRef.current);
+    try {
+      await save();
+      if (dirtyRef.current) { setNotice('修改尚未保存，已取消退出。请先重试保存或解决保存冲突。'); return; }
+      await request('/api/logout', { method: 'POST', headers: { 'X-CSRF-Token': session.csrfToken } });
+      onExpired();
+    } catch { setNotice('退出失败，请重试。'); }
+    finally { exitingRef.current = false; setBusy(false); }
   }
 
   const focus = useMemo(() => hovered ? lineageFocus(hovered, edges) : null, [hovered, edges]);
@@ -298,7 +314,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
       <Background gap={28} size={1} color="var(--grid)" bgColor="var(--canvas)"/>
     </ReactFlow>
     {pickerOpen && <ColorPicker color={cardColor} onClose={closePicker} onChange={next => {
-      if (loadingRef.current || next === colorRef.current || conflictRef.current || layoutWarningRef.current) return;
+      if (exitingRef.current || loadingRef.current || next === colorRef.current || conflictRef.current || layoutWarningRef.current) return;
       colorRef.current = next; setCardColor(next); changed(nodesRef.current); // 立即预览，沿用三秒合并写回。
     }}/>}
     <div className="toolbar" role="toolbar" aria-label="关系图工具">
@@ -310,7 +326,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
       <Tool label="自动排列并保存布局" disabled={busy || phase !== 'ready' || conflictRef.current || layoutWarningRef.current} onClick={relayout}><Network size={18}/></Tool>
       <Tool label={conflictRef.current ? '重新加载最新布局' : '刷新关系图'} disabled={busy} onClick={() => refresh(true)}><RefreshCw size={18} className={busy ? 'spin' : ''}/></Tool>
       <Hint label="在 FlowUs 中打开项目"><a className="tool" aria-label="在 FlowUs 中打开项目" href={project ? `https://flowus.cn/${project.id}` : undefined} target="_top"><ExternalLink size={17}/></a></Hint>
-      <Tool label="退出登录" onClick={logout}><LogOut size={17}/></Tool>
+      <Tool label="退出登录" disabled={busy} onClick={logout}><LogOut size={17}/></Tool>
     </div>
     {phase === 'loading' && <div className="canvas-empty"><LoaderCircle className="spin" size={23}/><p>正在读取项目关系…</p></div>}
     {phase === 'notfound' && <div className="canvas-empty"><Network size={30}/><h2>未找到项目</h2><p>请检查项目地址，或确认项目仍可访问。</p></div>}

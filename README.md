@@ -132,3 +132,11 @@ flowchart LR
 前端开发可运行 `npm run dev`；Vite 的 `/api` 代理目标是 `http://127.0.0.1:8787`，需另行启动 `PORT=8787` 的后端并将 `PUBLIC_ORIGIN` 设为浏览器实际开发来源。首次使用推荐上面的构建后 Compose 路径。
 
 仓库已公开，尚未指定开源许可证。
+
+## 保存与发布可靠性修复
+
+- 颜色/布局保存保留最后完成嵌入同步的 urlSlug；只有链接同步任务能推进该标记，避免改简写后保存颜色导致旧嵌入永久遗漏。
+- 应用内退出会等待在途或待执行保存；保存失败/冲突时取消退出并保留修改。页面隐藏时尽早尝试保存，但宿主强制销毁 iframe 不能保证完成；离开前以“布局已保存”为准。
+- `ops/release.py` 用独立候选目录发布，健康后保留当前资源及最近两版备份、当前及最近两版 Helix 镜像；旧哈希资源按入口递归引用清理。脚本仅管理 flowus-helix 镜像仓库和本项目目录，不做全局 Docker prune。新构建关闭共享 BuildKit 缓存，使用项目标签清理悬空镜像；历史共享 BuildKit 缓存因无法可靠归属，保留不动。
+
+已有 Compose 部署可在本机完成 `npm run build` 后，将 `server/`、`dist/`、`Dockerfile` 放入部署目录 `.incoming/YYYYMMDDTHHMMSSZ/`，再执行 `python3 ops/release.py --root /absolute/deployment --candidate /absolute/deployment/.incoming/YYYYMMDDTHHMMSSZ`。需已有 `flowus-helix:local` 镜像、Docker Compose、Python 3，且该目录的 Compose 服务名为 helix。首次初始化仍使用 QuickStart。清理仅在健康检查成功后执行；构建或健康失败时恢复上一镜像和资源。

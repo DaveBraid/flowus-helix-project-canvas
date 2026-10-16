@@ -99,3 +99,26 @@ test('HTTP API 需要登录、同源和 CSRF，Cookie 不向脚本暴露', async
   assert.equal((await put({ Origin: 'http://localhost:3000' })).status, 403);
   assert.equal((await put({ Origin: 'http://localhost:3000', 'X-CSRF-Token': session.csrfToken })).status, 200); assert.equal(saves, 1);
 });
+
+test('新简写保存颜色不能提前确认旧嵌入已同步', async () => {
+ let stored;
+ const projects=new Projects({request:async(method,path,body)=>{
+  if(method==='PATCH')stored=body.properties['Canvas 状态'];
+  return {data:{properties:{'Canvas 状态':stored}},etag:'v2'};
+ }});
+ projects.load=async()=>({project:{id:'p'},databaseId:'db',nodes:[{id:'a'}],revision:'v1',layout:{schemaVersion:1,ownerProjectId:'p',experimentDatabaseId:'db',urlSlug:'old',nodes:{a:{x:0,y:0}}}});
+ const result=await projects.save('new',{revision:'v1',positions:{a:{x:0,y:0}},cardColor:'#112233'});
+ assert.equal(result.layout.urlSlug,'old');
+ assert.equal(result.layout.cardColor,'#112233');
+ const {syncUrls}=await import('../server/sync.mjs');
+ const rich=text=>({rich_text:[{text:{content:text}}]});
+ const row={id:'p',properties:{slug:rich('new'),canvas:rich(JSON.stringify(result.layout))}};
+ let embedded='https://test/Helix/old';
+ const syncProject={api:{all:async(method,path)=>path.endsWith('/query')?[row]:[{id:'e',type:'embed',embed:{url:embedded}}],request:async(method,path,body)=>{
+  if(path==='/blocks/e')embedded=body.embed.url;
+  return {data:row,etag:'v2'};
+ }},database:'projects',allowed:[],slugField:'slug',layoutField:'canvas',publicOrigin:'https://test',cache:new Map()};
+ await syncUrls(syncProject);
+ assert.equal(embedded,'https://test/Helix/new');
+
+});

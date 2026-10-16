@@ -1,4 +1,5 @@
 FROM node:24-bookworm-slim
+LABEL io.helix.application="flowus-helix-project-canvas"
 ENV NODE_ENV=production PORT=3000
 WORKDIR /app
 COPY --chown=node:node server ./server

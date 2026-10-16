@@ -1,5 +1,6 @@
 services:
   helix:
+    image: flowus-helix:local
     build: .
     restart: unless-stopped
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}" # 与秘密文件所有者一致。

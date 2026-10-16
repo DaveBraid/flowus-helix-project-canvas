@@ -184,7 +184,8 @@ export class Projects {
       if (!ids.has(id) || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y) || Math.abs(point.x) > 1e6 || Math.abs(point.y) > 1e6) throw new ServiceError(400, '坐标含无效或不属于本项目的节点');
       normalized[id] = { x: Math.round(point.x), y: Math.round(point.y) };
     }
-    const layout = { schemaVersion: 1, ownerProjectId: graph.project.id, experimentDatabaseId: graph.databaseId, urlSlug: slug, nodes: normalized };
+    // urlSlug 由链接同步任务推进，普通保存必须保留最后同步地址。
+    const layout = { schemaVersion: 1, ownerProjectId: graph.project.id, experimentDatabaseId: graph.databaseId, urlSlug: validSlug(graph.layout?.urlSlug) ? graph.layout.urlSlug : slug, nodes: normalized };
     const savedColor = cardColor ?? graph.layout?.cardColor; // 老客户端保存坐标时保留已有颜色。
     if (savedColor !== undefined) layout.cardColor = savedColor.toLowerCase();
     const content = JSON.stringify(layout);
