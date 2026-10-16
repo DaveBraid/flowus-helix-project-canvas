@@ -8,3 +8,6 @@ oauth-state/
 bin/
 *.log
 .DS_Store
+
+.incoming/
+.releases/
