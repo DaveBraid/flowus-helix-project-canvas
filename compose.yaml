@@ -1,0 +1,26 @@
+services:
+  helix:
+    build: .
+    restart: unless-stopped
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}" # 与秘密文件所有者一致。
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 512m
+    ports:
+      - "127.0.0.1:3000:3000" # 公网访问必须经 HTTPS 反向代理。
+    environment:
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
+      FLOWUS_PROJECTS_DATABASE_ID: ${FLOWUS_PROJECTS_DATABASE_ID:?Set the Projects database ID}
+      PROJECT_IDS: ${PROJECT_IDS:-}
+      FLOWUS_TOKEN_FILE: /run/secrets/flowus-token
+      PASSWORD_HASH_FILE: /run/secrets/password-hash
+      SESSION_SECRET_FILE: /run/secrets/session-secret
+    volumes:
+      - ./secrets:/run/secrets:ro
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

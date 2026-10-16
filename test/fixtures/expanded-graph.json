@@ -1,0 +1,292 @@
+{
+  "project": {
+    "id": "example-project",
+    "title": "示例项目"
+  },
+  "nodes": [
+    {
+      "id": "node-01",
+      "number": "1",
+      "title": "示例阶段 1",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-01"
+    },
+    {
+      "id": "node-02",
+      "number": "2",
+      "title": "示例阶段 2",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-02"
+    },
+    {
+      "id": "node-03",
+      "number": "3",
+      "title": "示例阶段 3",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-03"
+    },
+    {
+      "id": "node-04",
+      "number": "4",
+      "title": "示例阶段 4",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-04"
+    },
+    {
+      "id": "node-05",
+      "number": "2.1",
+      "title": "示例阶段 2.1",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-05"
+    },
+    {
+      "id": "node-06",
+      "number": "2.2",
+      "title": "示例阶段 2.2",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-06"
+    },
+    {
+      "id": "node-07",
+      "number": "2.10",
+      "title": "示例阶段 2.10",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-07"
+    },
+    {
+      "id": "node-08",
+      "number": "2a",
+      "title": "示例阶段 2a",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-08"
+    },
+    {
+      "id": "node-09",
+      "number": "3.1",
+      "title": "示例阶段 3.1",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-09"
+    },
+    {
+      "id": "node-10",
+      "number": "3.2",
+      "title": "示例阶段 3.2",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-10"
+    },
+    {
+      "id": "node-11",
+      "number": "2.1.1",
+      "title": "示例阶段 2.1.1",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-11"
+    },
+    {
+      "id": "node-12",
+      "number": "2.1.2",
+      "title": "示例阶段 2.1.2",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-12"
+    },
+    {
+      "id": "node-13",
+      "number": "2.1.10",
+      "title": "示例阶段 2.1.10",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-13"
+    },
+    {
+      "id": "node-14",
+      "number": "3.1.1",
+      "title": "示例阶段 3.1.1",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-14"
+    },
+    {
+      "id": "node-15",
+      "number": "3.2.1",
+      "title": "示例阶段 3.2.1",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-15"
+    },
+    {
+      "id": "node-16",
+      "number": "1a",
+      "title": "示例阶段 1a",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-16"
+    },
+    {
+      "id": "node-17",
+      "number": "5",
+      "title": "示例阶段 5",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-17"
+    },
+    {
+      "id": "node-18",
+      "number": "6",
+      "title": "示例阶段 6",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-18"
+    },
+    {
+      "id": "node-19",
+      "number": "10",
+      "title": "示例阶段 10",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-19"
+    },
+    {
+      "id": "node-20",
+      "number": "11",
+      "title": "示例阶段 11",
+      "status": "计划中",
+      "url": "https://flowus.cn/node-20"
+    }
+  ],
+  "edges": [
+    {
+      "id": "node-01:node-02",
+      "source": "node-01",
+      "target": "node-02"
+    },
+    {
+      "id": "node-01:node-03",
+      "source": "node-01",
+      "target": "node-03"
+    },
+    {
+      "id": "node-02:node-04",
+      "source": "node-02",
+      "target": "node-04"
+    },
+    {
+      "id": "node-03:node-04",
+      "source": "node-03",
+      "target": "node-04"
+    },
+    {
+      "id": "node-02:node-05",
+      "source": "node-02",
+      "target": "node-05"
+    },
+    {
+      "id": "node-02:node-06",
+      "source": "node-02",
+      "target": "node-06"
+    },
+    {
+      "id": "node-02:node-07",
+      "source": "node-02",
+      "target": "node-07"
+    },
+    {
+      "id": "node-02:node-08",
+      "source": "node-02",
+      "target": "node-08"
+    },
+    {
+      "id": "node-03:node-09",
+      "source": "node-03",
+      "target": "node-09"
+    },
+    {
+      "id": "node-03:node-10",
+      "source": "node-03",
+      "target": "node-10"
+    },
+    {
+      "id": "node-05:node-11",
+      "source": "node-05",
+      "target": "node-11"
+    },
+    {
+      "id": "node-05:node-12",
+      "source": "node-05",
+      "target": "node-12"
+    },
+    {
+      "id": "node-05:node-13",
+      "source": "node-05",
+      "target": "node-13"
+    },
+    {
+      "id": "node-09:node-14",
+      "source": "node-09",
+      "target": "node-14"
+    },
+    {
+      "id": "node-10:node-15",
+      "source": "node-10",
+      "target": "node-15"
+    },
+    {
+      "id": "node-01:node-16",
+      "source": "node-01",
+      "target": "node-16"
+    },
+    {
+      "id": "node-04:node-17",
+      "source": "node-04",
+      "target": "node-17"
+    },
+    {
+      "id": "node-11:node-17",
+      "source": "node-11",
+      "target": "node-17"
+    },
+    {
+      "id": "node-12:node-17",
+      "source": "node-12",
+      "target": "node-17"
+    },
+    {
+      "id": "node-13:node-17",
+      "source": "node-13",
+      "target": "node-17"
+    },
+    {
+      "id": "node-06:node-17",
+      "source": "node-06",
+      "target": "node-17"
+    },
+    {
+      "id": "node-07:node-17",
+      "source": "node-07",
+      "target": "node-17"
+    },
+    {
+      "id": "node-08:node-17",
+      "source": "node-08",
+      "target": "node-17"
+    },
+    {
+      "id": "node-14:node-17",
+      "source": "node-14",
+      "target": "node-17"
+    },
+    {
+      "id": "node-15:node-17",
+      "source": "node-15",
+      "target": "node-17"
+    },
+    {
+      "id": "node-16:node-17",
+      "source": "node-16",
+      "target": "node-17"
+    },
+    {
+      "id": "node-17:node-18",
+      "source": "node-17",
+      "target": "node-18"
+    },
+    {
+      "id": "node-18:node-19",
+      "source": "node-18",
+      "target": "node-19"
+    }
+  ],
+  "layout": null,
+  "revision": "fixture"
+}

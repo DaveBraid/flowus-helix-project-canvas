@@ -1,0 +1,174 @@
+/* 节点与连线依据 Obsidian Helix 2.1.3 的 lineage 样式，宿主主题由浏览器色彩方案提供。 */
+:root {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  color-scheme: light;
+  --surface: #ffffff;
+  --surface-subtle: #fbfbfc;
+  --surface-hover: #f0f2f8;
+  --text: #202534;
+  --strong: #1f2431;
+  --muted: #768094;
+  --border: #e7e9ef;
+  --accent: #3855cf;
+  --accent-soft: #edf0fb;
+  --on-accent: #ffffff;
+  --canvas: #f6f7f9;
+  --grid: #cbd0db;
+  --project-color: #808080;
+  --relation-inherit: #858585;
+  --relation-branch: #7351b6;
+  --relation-merge: #23765c;
+  --status-idea: #73839b;
+  --status-active: #6668d9;
+  --status-recording: #2f8793;
+  --status-completed: #2f9b67;
+  --status-paused: #c48820;
+  --status-terminated: #b75c61;
+  --error: #b43b55;
+  --shadow: 0 5px 24px #2025340e;
+  --card-shadow: 0 2px 10px #0000000f;
+  --card-hover-shadow: 0 6px 18px #00000016;
+  --tooltip-bg: #202534;
+  --tooltip-text: #ffffff;
+  color: var(--text);
+  background: var(--canvas);
+}
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface: #202020;
+    --surface-subtle: #22252c;
+    --surface-hover: #303440;
+    --text: #dadada;
+    --strong: #dedede;
+    --muted: #999999;
+    --border: #353535;
+    --accent: #aab8ff;
+    --accent-soft: #30374f;
+    --on-accent: #1e2026;
+    --canvas: #1e1e1e;
+    --grid: #414653;
+    --project-color: #808080;
+    --relation-inherit: #a6a6a6;
+    --relation-branch: #c5a4ff;
+    --relation-merge: #72d8b7;
+    --status-idea: #adb4c3;
+    --status-active: #aab8ff;
+    --status-recording: #81cbd5;
+    --status-completed: #70dfad;
+    --status-paused: #e6bd69;
+    --status-terminated: #ff9daa;
+    --error: #ff9daa;
+    --shadow: 0 5px 24px #00000033;
+    --card-shadow: 0 2px 10px #00000026;
+    --card-hover-shadow: 0 6px 18px #00000040;
+    --tooltip-bg: #e4e6ed;
+    --tooltip-text: #1e2026;
+}
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+button, input { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; color: var(--text); }
+button:disabled { cursor: default; opacity: .4; }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.canvas-shell { position: relative; width: 100%; height: 100%; background: var(--canvas); }
+.react-flow, .react-flow.dark { background: var(--canvas); }
+.react-flow__edge-path { stroke: var(--relation-inherit); }
+.react-flow__node { border: 0 !important; background: none !important; }
+/* 复刻源码最终覆盖规则：顶部 4px 色条、纯色卡片、项目名与底部关系摘要。 */
+.experiment {
+  position: relative; width: 248px; height: 128px; display: flex; flex-direction: column;
+  gap: 7px; padding: 12px 14px 11px; color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--project-color) 48%, var(--border));
+  border-radius: 9px; background: var(--surface);
+  box-shadow: 0 3px 12px #0000000e, 0 0 0 1px color-mix(in srgb, var(--project-color) 5%, transparent);
+  transition: border-color .12s, box-shadow .12s, opacity .16s, filter .16s;
+}
+.experiment::before { content: ''; position: absolute; inset: 0 0 auto; height: 4px; border-radius: 8px 8px 0 0; background: var(--project-color); }
+.experiment.lineage-dimmed { opacity: .18; filter: saturate(.55); }
+.node-title { color: var(--strong); font-size: 14px; font-weight: 680; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+.node-title:hover { color: var(--accent); text-decoration: underline; }
+.node-project { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-relations { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
+.experiment:hover { border-color: color-mix(in srgb, var(--project-color) 72%, var(--border)); box-shadow: var(--card-hover-shadow); }
+.experiment.selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent), var(--card-hover-shadow); }
+.node-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 20px; }
+.number { font-size: 10px; font-weight: 650; letter-spacing: .02em; color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+.status { display: inline-flex; align-items: center; gap: 5px; max-width: 116px; padding: 2px 5px; border-radius: 6px; font-size: 11px; line-height: 20px; font-weight: 650; background: transparent; }
+.status svg { flex-shrink: 0; }
+.status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status.is-idea { color: var(--status-idea); }
+.status.is-active { color: var(--status-active); }
+.status.is-recording { color: var(--status-recording); }
+.status.is-completed { color: var(--status-completed); background: color-mix(in srgb, var(--status-completed) 7%, transparent); }
+.status.is-paused { color: var(--status-paused); }
+.status.is-terminated { color: var(--status-terminated); }
+.node-bottom { display: flex; align-items: center; gap: 5px; }
+.node-bottom strong { flex: 1; min-width: 0; font-size: 14px; font-weight: 680; line-height: 1.35; color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-open { color: var(--muted); width: 23px; height: 23px; display: flex; align-items: center; justify-content: center; border-radius: 5px; }
+.node-open:hover { color: var(--accent); background: var(--accent-soft); }
+.experiment .react-flow__handle { width: 7px; height: 7px; min-width: 7px; min-height: 7px; opacity: 0; background: var(--project-color); border: 2px solid var(--surface); pointer-events: none; }
+/* 保留悬浮全图标工具栏，仅调整主题颜色。 */
+.toolbar { position: absolute; top: 16px; right: 16px; padding: 5px; display: flex; align-items: center; gap: 2px; max-width: calc(100% - 20px); border-radius: 11px; border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow); z-index: 5; }
+.tool { border: 0; background: transparent; width: 33px; height: 33px; display: flex; align-items: center; justify-content: center; border-radius: 7px; color: var(--muted); flex-shrink: 0; }
+.tool:hover:enabled { background: var(--accent-soft); color: var(--accent); }
+.divider { width: 1px; background: var(--border); height: 19px; margin: 0 3px; }
+.hint-trigger { display: inline-flex; flex-shrink: 0; }
+.hint-popover { position: fixed; z-index: 100; max-width: calc(100vw - 16px); padding: 7px 10px; border-radius: 6px; background: var(--tooltip-bg); color: var(--tooltip-text); box-shadow: var(--shadow); font-size: 11px; font-weight: 500; line-height: 1.4; pointer-events: none; overflow-wrap: anywhere; }
+.canvas-caption { position: absolute; bottom: 17px; left: 20px; right: 20px; display: flex; align-items: center; gap: 12px; pointer-events: none; min-width: 0; font-size: 10px; color: var(--muted); }
+.project-name { font-weight: 550; color: var(--muted); max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.caption-detail { white-space: nowrap; }
+.save-state { margin-left: auto; white-space: nowrap; }
+.notice { position: absolute; top: 70px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 28px); padding: 10px 13px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); color: var(--error); font-size: 12px; line-height: 1.6; display: flex; gap: 8px; align-items: center; z-index: 6; }
+.retry { background: none; border: 0; display: flex; color: var(--error); padding: 3px; }
+.canvas-empty { position: absolute; left: 20px; right: 20px; top: 50%; transform: translateY(-50%); display: flex; align-items: center; flex-direction: column; text-align: center; color: var(--muted); gap: 2px; pointer-events: none; font-size: 12px; }
+.canvas-empty button { pointer-events: auto; }
+.canvas-empty h2 { font-size: 15px; font-weight: 550; color: var(--text); margin: 13px 0 2px; }
+.canvas-empty p { line-height: 1.7; margin: 9px 0; }
+.center-screen { height: 100%; width: 100%; overflow: auto; display: flex; justify-content: center; align-items: center; gap: 12px; padding: 26px; color: var(--muted); font-size: 12px; }
+.login-card { width: 300px; max-width: 100%; text-align: left; padding: 4px; }
+.brand-mark { color: var(--accent); margin-bottom: 12px; }
+.login-card h1 { color: var(--text); font-size: 27px; letter-spacing: -1px; font-weight: 600; margin: 0; }
+.login-card p { font-size: 12px; color: var(--muted); margin: 9px 0 27px; }
+.login-card label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 8px; }
+.session-note { float: right; font-size: 10px; color: var(--muted); font-weight: 400; }
+.password-field { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 0 12px; background: var(--surface); color: var(--muted); }
+.password-field:focus-within { border-color: var(--accent); }
+.password-field input { height: 40px; width: 100%; min-width: 0; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 13px; }
+.password-field input::placeholder { color: var(--muted); }
+.primary { width: 100%; margin-top: 12px; background: var(--accent); border: 0; border-radius: 8px; min-height: 40px; color: var(--on-accent); font-size: 12px; display: flex; justify-content: center; align-items: center; }
+.primary:hover:enabled { filter: brightness(1.07); }
+.form-error { margin-top: 14px; color: var(--error); font-size: 12px; line-height: 1.6; }
+.standalone { font-size: 12px; color: var(--accent); display: flex; gap: 5px; align-items: center; margin-top: 12px; }
+.route-empty { text-align: center; line-height: 1.7; }
+.route-empty h1 { font-size: 18px; font-weight: 550; color: var(--text); }
+.text-button { font-size: 12px; border: 0; background: none; color: var(--accent); padding: 7px; text-decoration: underline; text-underline-offset: 3px; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 400px) {
+  .toolbar { top: 10px; right: 10px; padding: 4px; gap: 0; }
+  .tool { width: 30px; height: 30px; }
+  .canvas-caption { left: 12px; right: 12px; gap: 8px; flex-wrap: wrap; bottom: 12px; }
+  .save-state, .caption-detail { font-size: 9px; }
+  .notice { top: 60px; }
+  .center-screen { padding: 20px; }
+}
+@media (max-height: 350px) {
+  .login-card { margin: auto; }
+  .login-card p { margin-bottom: 14px; }
+  .brand-mark { margin-bottom: 5px; }
+  .center-screen { align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+
+/* 浮动 RGB 调色面板：不改变画布大小，窄窗口内保持可操作。 */
+.color-picker{position:absolute;z-index:8;top:64px;right:16px;width:260px;max-width:calc(100% - 20px);padding:12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);font-size:12px}
+.color-picker header,.color-picker footer{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.color-picker input[type=color]{display:block;width:100%;height:40px;padding:2px;margin:8px 0;border:1px solid var(--border);border-radius:5px;background:transparent;cursor:pointer}
+.color-channel{display:flex;align-items:center;gap:8px;margin:9px 0}
+.color-channel input[type=range]{flex:1;min-width:0;accent-color:var(--project-color)}
+.color-channel input[type=number]{width:49px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px;font-size:11px}
+.color-picker footer button{background:transparent;border:0;color:var(--muted);font-size:11px;padding:5px}
+@media(max-width:400px){.color-picker{top:58px;right:10px}.toolbar .tool{width:28px}}
