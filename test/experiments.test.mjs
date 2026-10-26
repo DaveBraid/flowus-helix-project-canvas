@@ -168,3 +168,21 @@ test('来源版本不一致时拒绝创建', async () => {
   await assert.rejects(f.projects.createExperiment('test', { ...input, sourceIds: [b] }), { status: 409 });
   assert.equal(f.calls.some(c => c.method === 'POST'), false);
 });
+
+test('模板缓存每次核对版本、返回独立副本，改版和归档不复用旧正文', async () => {
+ const f=fixture(); const exp=f.projects.experiments;
+ const first=await exp.template();first.children.length=0;
+ const count=f.calls.length;assert.equal((await exp.template()).children.length,f.template.length);
+ assert.equal(f.calls.length-count,1);
+ const original=f.projects.api.request;
+ f.projects.api.request=async (...args)=>{const r=await original(...args);if(args[1]===`/pages/${templateId}`)r.etag='W/"new"';return r;};
+ f.template.push(paragraph('新版模板'));
+ assert.equal((await exp.template()).children.at(-1).paragraph.rich_text[0].plain_text,'新版模板');
+ f.pages.get(templateId).archived=true;
+ await assert.rejects(exp.template(),{status:409});assert.equal(exp.templateCache,null);
+});
+test('缓存模板和来源内容合计仍执行块数上限',async()=>{
+ const f=fixture();await f.projects.experiments.template();f.projects.experiments.templateCache.count=2000;
+ await assert.rejects(f.projects.createExperiment('test',{...input,sourceIds:[a]}),{status:413});
+ assert.equal(f.calls.some(c=>c.method==='POST'),false);
+});

@@ -16,7 +16,7 @@ export function secret(name) {
 
 /** 全实例串行限速；输入请求函数，输出限速后的响应。 */
 export class FlowUs {
-  constructor({ token, tokenProvider, fetchImpl = fetch, interval = 800, base = 'https://api.flowus.cn' }) {
+  constructor({ token, tokenProvider, fetchImpl = fetch, interval = 600, base = 'https://api.flowus.cn' }) {
     this.token = token; this.fetch = fetchImpl; this.interval = interval; this.base = base;
     this.tokenProvider = tokenProvider;
     this.queue = Promise.resolve(); this.next = 0;
@@ -27,7 +27,7 @@ export class FlowUs {
       let refreshed = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         await new Promise(r => setTimeout(r, Math.max(0, this.next - Date.now())));
-        this.next = Date.now() + this.interval; // 预留流量给人工 CLI 操作。
+        this.next = Date.now() + this.interval; // 最多约 100 次/分钟，保留 20 次余量；429 仍退避。
         let response;
         try {
           response = await this.fetch(`${this.base}/v2${path}`, {
@@ -46,8 +46,8 @@ export class FlowUs {
           continue;
         }
         if (!response.ok) {
-          const status = response.status === 409 ? 409 : response.status === 404 ? 404 : 503;
-          throw new ServiceError(status, status === 409 ? '数据已被其他窗口修改，请刷新后重试' : status === 404 ? 'FlowUs 内容不存在或无权访问' : 'FlowUs 请求失败，请检查授权或稍后重试');
+          const status = [403, 404, 409].includes(response.status) ? response.status : 503;
+          throw new ServiceError(status, status === 409 ? '数据已被其他窗口修改，请刷新后重试' : [403, 404].includes(status) ? 'FlowUs 内容不存在或无权访问' : 'FlowUs 请求失败，请检查授权或稍后重试');
         }
         return { data: await response.json(), etag: response.headers.get('etag') };
       }

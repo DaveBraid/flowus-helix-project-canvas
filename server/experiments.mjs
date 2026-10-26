@@ -95,6 +95,26 @@ export const pageRevision = page => typeof page?.last_edited_time === 'string' ?
 /** 实验写入只操作当前项目实验表；创建正文一次提交，按官方幂等键重试。 */
 export class Experiments {
   constructor(projects, templateId) { this.projects = projects; this.templateId = templateId; this.creates = new Map(); }
+  /** 按模板版本复用原生正文；输入无，输出独立副本，修改模板后自动重读。 */
+  async template() {
+    if (this.templatePending) return structuredClone(await this.templatePending);
+    const pending = (async () => {
+      if (!uuid(this.templateId)) throw new ServiceError(503, '服务尚未配置实验记录模板');
+      const api = this.projects.api;
+      const { data: page, etag } = await api.request('GET', `/pages/${this.templateId}`);
+      if (!alive(page) || !etag) { this.templateCache = null; throw new ServiceError(409, '模板无效或缺少版本，未创建实验'); }
+      if (this.templateCache?.revision === etag) return this.templateCache;
+      this.templateCache = null;
+      const blocks = await api.all('GET', `/blocks/${this.templateId}/children`);
+      const target = section(blocks, ['本阶段问题聚焦', '本轮聚焦问题']);
+      const budget = { count: 0 }; const children = await copyBlocks(api, blocks, budget);
+      const { data: confirmed, etag: revision } = await api.request('GET', `/pages/${this.templateId}`);
+      if (!alive(confirmed) || revision !== etag) throw new ServiceError(409, '准备期间模板已变化，未创建实验');
+      return this.templateCache = { revision, children, start: target.start, count: budget.count };
+    })();
+    this.templatePending = pending;
+    try { return structuredClone(await pending); } finally { if (this.templatePending === pending) this.templatePending = null; }
+  }
   async create(slug, input) {
     if (!input || typeof input !== 'object' || Object.keys(input).some(key => !['title', 'sourceIds', 'requestId'].includes(key))) throw new ServiceError(400, '新增实验参数无效');
     const title = titleValue(input.title); const ids = sourceValues(input.sourceIds);
@@ -117,16 +137,12 @@ export class Experiments {
         const project = await this.projects.resolve(slug);
         if (project.id !== entry.projectId) throw new ServiceError(409, '项目简写已指向其他项目，禁止重放原创建请求');
       }
-      if (entry.result) return entry.result;
+      if (entry.result) { const { graphPatch, ...result } = entry.result; return result; } // 重放不能返回旧图快照。
       const api = this.projects.api;
       if (!entry.body) {
         const graph = await this.projects.load(slug, { forCreate: true }); validateSources(graph, ids);
         const db = graph.databaseSchema;
-        const { data: templatePage, etag: templateRevision } = await api.request('GET', `/pages/${this.templateId}`);
-        if (!alive(templatePage) || !templateRevision) throw new ServiceError(409, '模板无效或缺少版本，未创建实验');
-        const template = await api.all('GET', `/blocks/${this.templateId}/children`);
-        const target = section(template, ['本阶段问题聚焦', '本轮聚焦问题']);
-        const budget = { count: 0 }; const children = await copyBlocks(api, template, budget);
+        const budget = { count: 0 };
         const quotes = [];
         const sources = graph.nodes.filter(node => ids.includes(node.id)).sort((a, b) => a.number.localeCompare(b.number, 'zh-CN', { numeric: true }) || a.id.localeCompare(b.id));
         for (const source of sources) {
@@ -139,9 +155,10 @@ export class Experiments {
           if (!sourceRevision || confirmedSource !== sourceRevision || !alive(sourcePage) || sourcePage.parent?.database_id !== graph.databaseId) throw new ServiceError(409, '继承期间来源已变化，未创建实验');
           quotes.push({ object: 'block', type: 'quote', quote: { rich_text: [richText(`来源：${source.title}`, url)] }, ...(content.length ? { children: content } : {}) });
         }
-        const { etag: confirmedTemplate } = await api.request('GET', `/pages/${this.templateId}`);
-        if (confirmedTemplate !== templateRevision) throw new ServiceError(409, '准备期间模板已变化，未创建实验');
-        children.splice(target.start + 1, 0, ...quotes);
+        const template = await this.template(); // 提交时仍向 FlowUs 核对版本；命中缓存只需一次请求。
+        if (budget.count + template.count > 2000) throw new ServiceError(413, '模板及引用正文超过 2000 块，未创建实验');
+        const children = template.children;
+        children.splice(template.start + 1, 0, ...quotes);
         if (children.length > 100) throw new ServiceError(413, '模板与来源引用合计超过 100 个顶层块，未创建实验');
         // 先写预计编号；普通追加无需再 PATCH 标题及重读，分支变更仍由协调器校正。
         const pendingId = `pending:${input.requestId}`;

@@ -9,6 +9,7 @@ import './style.css';
 import { WIDTH, HEIGHT, lineageFocus, orderSavedPositions, edgeRoute, canvasBounds } from './graph.mjs';
 import { arrange } from './graph.mjs';
 import ExperimentEditor from './ExperimentEditor.jsx';
+import { readSnapshot, writeSnapshot, clearSnapshots } from './snapshot.mjs';
 import { readViewport, writeViewport, zoomLimit } from './viewport.mjs';
 
 /** 监听浏览器实际主题；输入无，输出亮暗模式，兼容系统与宿主提供的色彩方案。 */
@@ -179,6 +180,9 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   const colorRef = useRef('#808080');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editor, setEditor] = useState(null);
+  useEffect(() => {
+    if (editor?.type === 'create') request(`/api/projects/${encodeURIComponent(slug)}/prepare-create`, { method: 'POST', headers: { 'X-CSRF-Token': session.csrfToken }, body: '{}' }).catch(() => {}); // 打开弹层时准备；失败仍由正式提交给出错误。
+  }, [editor?.type, slug, session.csrfToken]);
   const [connectionPreview, setConnectionPreview] = useState(null);
   const [statusOptions, setStatusOptions] = useState([]);
   const mutationRef = useRef(false);
@@ -255,7 +259,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
       async function* updates() {
         if (suppliedGraph) { yield suppliedGraph; return; } // 创建响应已确认编号，直接绘制真实记录。
         if (!graphRef.current) {
-          const preview = await request(`${endpoint}/preview`);
+          const preview = readSnapshot(slug) || await request(`${endpoint}/preview`);
           if (preview) yield { ...preview, preview: true };
         }
         layoutWarningRef.current = true; // 编号协调完成前禁写，失败保留当前图。
@@ -288,6 +292,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
       const ids = new Set(graph.nodes.map(node => node.id));
       const nextEdges = graph.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)).map(edge => ({ ...edge, type: 'helix' }));
       graphRef.current = graph;
+      if (!graph.preview && !graph.readOnlyError) writeSnapshot(slug, { ...graph, layout: { ...graph.layout, nodes: Object.fromEntries(next.map(node => [node.id, node.position])) } }); // 保存显示坐标，避免下次预览重新排布。
       if (!dirtyRef.current || conflictRef.current) revisionRef.current = graph.revision; // 拉取期间若发生拖动，保留旧版本以检测并发修改。
       conflictRef.current = false;
       layoutWarningRef.current = Boolean(graph.layoutWarning || graph.preview || graph.readOnlyError);
@@ -313,11 +318,11 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
       return true;
     } catch (failure) {
       if (failure.status === 401) onExpired();
-      else if (failure.status === 404) { setNodes([]); setEdges([]); graphRef.current = null; setPhase('notfound'); }
+      else if ([403, 404].includes(failure.status)) { clearSnapshots(slug); setNodes([]); setEdges([]); graphRef.current = null; setPhase('notfound'); }
       else { if (!graphRef.current) setPhase('error'); setNotice(failure.reconcile ? `编号协调未完成：${failure.message} 当前关系图仅供查看，编辑已停用。可点击刷新重试。` : failure.status === 503 ? 'FlowUs 暂时不可用，当前关系图可能不是最新，请重试刷新。' : '暂时无法加载关系图，请稍后重试。'); }
       return false;
     } finally { loadingRef.current = false; setBusy(false); }
-  }, [endpoint, flow, changed, onExpired, session.csrfToken]);
+  }, [endpoint, flow, changed, onExpired, session.csrfToken, slug]);
 
   useEffect(() => {
     refresh();
@@ -349,7 +354,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
       await save();
       if (dirtyRef.current) { setNotice('修改尚未保存，已取消退出。请先重试保存或解决保存冲突。'); return; }
       await request('/api/logout', { method: 'POST', headers: { 'X-CSRF-Token': session.csrfToken } });
-      onExpired();
+      clearSnapshots(); onExpired();
     } catch { setNotice('退出失败，请重试。'); }
     finally { exitingRef.current = false; setBusy(false); }
   }

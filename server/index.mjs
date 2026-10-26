@@ -68,6 +68,12 @@ export function createApp({ auth, projects, origin, dist = resolve(dirname(fileU
           const slug = decodeURIComponent(reconcile[1]);
           return send(res, 200, await projects.withMutation(slug, () => reconcileNumbers(projects, slug)));
         }
+        const prepare = path.match(/^\/api\/projects\/([^/]+)\/prepare-create$/);
+        if (prepare && req.method === 'POST') {
+          await projects.resolve(decodeURIComponent(prepare[1])); // 只预热有效项目；模板内容不返回浏览器。
+          await projects.experiments.template();
+          return send(res, 200, { ready: true });
+        }
         const experiment = path.match(/^\/api\/projects\/([^/]+)\/experiments(?:\/([^/]+))?$/);
         if (experiment) {
           const slug = decodeURIComponent(experiment[1]);
@@ -87,12 +93,13 @@ export function createApp({ auth, projects, origin, dist = resolve(dirname(fileU
       const match = path.match(/^\/Helix\/([^/]+)\/?$/);
       let file;
       if (match && validSlug(decodeURIComponent(match[1]))) {
-        if (session) await projects.resolve(decodeURIComponent(match[1])); // 已登录访问不存在的简写返回 HTTP 404。
+        // 页面外壳不等待 FlowUs；数据接口校验简写，失败后客户端清除预览。
         file = resolve(dist, 'index.html');
       } else if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(path)) file = resolve(dist, `.${path}`);
       else throw new ServiceError(404, '页面不存在');
       const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' }[extname(file)] || 'application/octet-stream';
       if (!(await stat(file)).isFile()) throw new ServiceError(404, '资源不存在');
+      if (/^\/assets\/.+-[a-zA-Z0-9_-]{8,}\.(js|css|woff2|svg)$/.test(path)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // 文件名含内容哈希，更新会自动换 URL。
       const data = await readFile(file); res.writeHead(200, { 'Content-Type': mime }); res.end(req.method === 'HEAD' ? undefined : data);
     } catch (error) {
       const status = error instanceof ServiceError ? error.status : error instanceof URIError ? 400 : error.code === 'ENOENT' ? 404 : 500;

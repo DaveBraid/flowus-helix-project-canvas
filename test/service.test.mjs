@@ -100,6 +100,7 @@ test('HTTP API 需要登录、同源和 CSRF，Cookie 不向脚本暴露', async
   assert.equal((await put({ Origin: 'http://localhost:3000', 'X-CSRF-Token': session.csrfToken })).status, 200); assert.equal(saves, 1);
 });
 
+
 test('新简写保存颜色不能提前确认旧嵌入已同步', async () => {
  let stored;
  const projects=new Projects({request:async(method,path,body)=>{
@@ -121,4 +122,25 @@ test('新简写保存颜色不能提前确认旧嵌入已同步', async () => {
  await syncUrls(syncProject);
  assert.equal(embedded,'https://test/Helix/new');
 
+});
+
+test('页面外壳不等待 FlowUs，带哈希资源缓存，预热仍需要鉴权和CSRF', async t => {
+ const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+ const { tmpdir } = await import('node:os');
+ const { join } = await import('node:path');
+ const dist=await mkdtemp(join(tmpdir(),'helix-static-'));
+ await mkdir(join(dist,'assets'));await writeFile(join(dist,'index.html'),'<html>shell</html>');await writeFile(join(dist,'assets/index-abcdefgh.js'),'void 0');
+ t.after(()=>rm(dist,{recursive:true,force:true}));
+ const auth=new Auth('a'.repeat(32),passwordHash,{secure:false});let resolved=0,prepared=0;
+ const projects={resolve:async()=>{resolved++;},experiments:{template:async()=>{prepared++;}}};
+ const server=createApp({auth,projects,origin:'http://localhost:3000',dist});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>server.close());
+ const base=`http://127.0.0.1:${server.address().port}`,issued=auth.issue(),cookie=auth.cookie(issued.token).split(';')[0];
+ assert.equal((await fetch(base+'/Helix/test',{headers:{cookie}})).status,200);assert.equal(resolved,0);
+ const asset=await fetch(base+'/assets/index-abcdefgh.js');assert.match(asset.headers.get('cache-control'),/immutable/);
+ const url=base+'/api/projects/test/prepare-create',headers={Origin:'http://localhost:3000','Content-Type':'application/json'};
+ assert.equal((await fetch(url,{method:'POST',headers,body:'{}'})).status,401);
+ assert.equal((await fetch(url,{method:'POST',headers:{...headers,cookie},body:'{}'})).status,403);
+ assert.equal((await fetch(url,{method:'POST',headers:{...headers,cookie,'X-CSRF-Token':issued.csrfToken},body:'{}'})).status,200);
+ assert.equal(prepared,1);assert.equal(resolved,1);
 });
