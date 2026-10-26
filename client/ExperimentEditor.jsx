@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { compareExperiments } from './graph.mjs';
 import { X, Check, LoaderCircle, ExternalLink } from 'lucide-react';
 
 /** 展示实验写回弹层；输入当前图及操作回调，输出保留失败输入的表单。 */
@@ -72,7 +73,7 @@ export default function ExperimentEditor({ editor, nodes, edges, statusOptions, 
         <a className="editor-primary" href={node?.data.url} target="_top" onClick={event => onPrepareLeave(event)}>确认影响并前往 FlowUs <ExternalLink size={14}/></a>
       </div> : <form onSubmit={submit}>
         {editor.type === 'create' ? <><label className="editor-field">实验名称<input autoFocus required maxLength={180} value={title} onChange={event => setTitle(event.target.value)} placeholder="输入实验名称" disabled={working || retryLocked}/></label><p className="editor-note">编号按实验关系自动生成。</p></> : <label className="editor-field">目标实验<select autoFocus required value={targetId} disabled={working} onChange={event => { setTargetId(event.target.value); setSourceIds(sourcesFor(event.target.value)); setError(''); }}><option value="">选择已有实验</option>{nodes.filter(item => item.id !== editor.sourceId).map(item => <option value={item.id} key={item.id}>{item.data.title}</option>)}</select></label>}
-        <fieldset disabled={working || retryLocked || !!outsideSources.length}><legend>来源实验（可多选）</legend><div className="source-options">{nodes.filter(item => item.id !== targetId).map(item => <label key={item.id}><input type="checkbox" checked={sourceIds.includes(item.id)} onChange={event => setSourceIds(ids => event.target.checked ? [...ids, item.id] : ids.filter(id => id !== item.id))}/><span>{item.data.title}</span></label>)}{!nodes.length && <p className="editor-note">当前没有实验，可直接新建起始实验。</p>}</div></fieldset>
+        <fieldset disabled={working || retryLocked || !!outsideSources.length}><legend>来源实验（可多选）</legend><div className="source-options">{nodes.filter(item => item.id !== targetId).sort((a, b) => editor.type === 'create' ? compareExperiments(b.data, a.data) : 0).map(item => <label key={item.id}><input type="checkbox" checked={sourceIds.includes(item.id)} onChange={event => setSourceIds(ids => event.target.checked ? [...ids, item.id] : ids.filter(id => id !== item.id))}/><span>{item.data.title}</span></label>)}{!nodes.length && <p className="editor-note">当前没有实验，可直接新建起始实验。</p>}</div></fieldset>
         {!!outsideSources.length && <p className="form-error">目标含 {outsideSources.length} 个当前画布外来源。为避免清除关系，请在 FlowUs 中修改。</p>}
         {editor.type === 'create' && <p className="editor-note">新实验将分别引用所选来源的正文。之后修改连接不会重新继承正文。</p>}
         {editor.type === 'connect' && target && <p className="editor-note">仅更新「{target.data.title}」的来源关系，保留其正文和状态。</p>}

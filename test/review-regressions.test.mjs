@@ -117,3 +117,12 @@ test('批量短关系数组复用，20条以上仍完整分页补读', async () 
   assert.equal(calls.some(c=>c.path.endsWith('/properties/source')),count>=20);
  }
 });
+
+test('新增准备复用表结构，保留完整关系校验而跳过画布属性分页', async () => {
+  const { projects, calls } = projectFixture();
+  const graph = await projects.load('test', { forCreate: true });
+  assert.equal(graph.databaseSchema.id, 'db');
+  assert.equal(graph.edges.length, 2);
+  assert.equal(calls.filter(c => c.path === '/databases/db').length, 1);
+  assert(!calls.some(c => c.path.includes('/properties/canvas')));
+});

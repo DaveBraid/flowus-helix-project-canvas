@@ -37,7 +37,7 @@ function fixture() {
     },
   };
   const projects = new Projects(api, { templateId });
-  projects.load = async () => structuredClone(graph);
+  projects.load = async () => ({ ...structuredClone(graph), databaseSchema: structuredClone(db) });
   projects.resolve = async () => ({ id: currentProject });
   return { projects, calls, graph, template, bodies, pages, db, failPost: () => { postFailures++; }, moveProject: () => { currentProject = foreignId; } };
 }
@@ -131,4 +131,13 @@ test('FlowUs重试401/429保留官方幂等键', async () => {
   const headers = []; let calls = 0;
   const api = new FlowUs({ interval: 0, token: 'test-only', fetchImpl: async (url, options) => { headers.push(options.headers); return ++calls === 1 ? new Response('{}', { status: 429, headers: { 'retry-after': '0.001' } }) : new Response('{"id":"created"}'); } });
   await api.request('POST', '/pages', { children: [] }, undefined, 'stable-key'); assert.equal(headers.length, 2); assert.equal(headers.every(h => h['Idempotency-Key'] === 'stable-key'), true);
+});
+
+test('新建一次写入预计连续编号，不重复读取实验表结构', async () => {
+  const { projects, calls, graph } = fixture();
+  graph.nodes.forEach((node,i)=>{node.createdTime=`2026-01-0${i+1}T00:00:00.000Z`;});
+  await projects.createExperiment('test', { ...input, sourceIds: [b] });
+  const post=calls.find(c=>c.method==='POST');
+  assert.equal(post.body.properties.实验内容.title[0].text.content,'4. 合并后的实验');
+  assert(!calls.some(c=>c.path===`/databases/${dbId}`));
 });

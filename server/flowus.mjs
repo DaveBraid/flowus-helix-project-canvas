@@ -139,7 +139,7 @@ export class Projects {
     this.pending.set(slug, pending);
     try { return await pending; } finally { if (this.pending.get(slug) === pending) this.pending.delete(slug); }
   }
-  async load(slug, { relations = true } = {}) {
+  async load(slug, { relations = true, forCreate = false } = {}) {
     const match = await this.resolve(slug);
     const { data: page, etag } = await this.api.request('GET', `/pages/${match.id}`);
     if (!alive(page)) throw new ServiceError(404, '项目不存在');
@@ -162,6 +162,8 @@ export class Projects {
       if (relation.relation.some(item => !item || typeof item.id !== 'string')) throw new ServiceError(503, '实验关联响应不完整');
     }
     const { nodes, edges, missingRelations } = graphRecords(records);
+    // 创建只需真实归属、关系和表结构，不读取无关的画布布局属性。
+    if (forCreate) return { project: { id: page.id }, databaseId: db.id, databaseSchema: db, nodes, edges, missingRelations };
     let layoutProperty = property(page, this.layoutField);
     if (!layoutProperty || layoutProperty.type !== 'rich_text') throw new ServiceError(409, '项目缺少文本类型的 Canvas 状态属性');
     if (layoutProperty.rich_text?.length || layoutProperty.has_more) {

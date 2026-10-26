@@ -1,3 +1,4 @@
+import { stageNumbers } from './numbering.mjs';
 import { createHash } from 'node:crypto';
 import { ServiceError, plain, alive } from './flowus.mjs';
 
@@ -119,8 +120,8 @@ export class Experiments {
       if (entry.result) return entry.result;
       const api = this.projects.api;
       if (!entry.body) {
-        const graph = await this.projects.load(slug); validateSources(graph, ids);
-        const { data: db } = await api.request('GET', `/databases/${graph.databaseId}`);
+        const graph = await this.projects.load(slug, { forCreate: true }); validateSources(graph, ids);
+        const db = graph.databaseSchema;
         const { data: templatePage, etag: templateRevision } = await api.request('GET', `/pages/${this.templateId}`);
         if (!alive(templatePage) || !templateRevision) throw new ServiceError(409, '模板无效或缺少版本，未创建实验');
         const template = await api.all('GET', `/blocks/${this.templateId}/children`);
@@ -143,7 +144,10 @@ export class Experiments {
         if (confirmedTemplate !== templateRevision) throw new ServiceError(409, '准备期间模板已变化，未创建实验');
         children.splice(target.start + 1, 0, ...quotes);
         if (children.length > 100) throw new ServiceError(413, '模板与来源引用合计超过 100 个顶层块，未创建实验');
-        const properties = { [titleField(db)]: { type: 'title', title: [richText(title)] }, 来源实验: { type: 'relation', relation: ids.map(id => ({ id })) } };
+        // 先写预计编号；普通追加无需再 PATCH 标题及重读，分支变更仍由协调器校正。
+        const pendingId = `pending:${input.requestId}`;
+        const number = stageNumbers({ nodes: [...graph.nodes, { id: pendingId, createdTime: new Date().toISOString() }], edges: [...graph.edges, ...ids.map(source => ({ source, target: pendingId }))] }).get(pendingId);
+        const properties = { [titleField(db)]: { type: 'title', title: [richText(`${number}. ${title}`)] }, 来源实验: { type: 'relation', relation: ids.map(id => ({ id })) } };
         if (db.properties?.状态?.select?.options?.some(option => option.name === '计划中')) properties.状态 = { type: 'select', select: { name: '计划中' } };
         entry.projectId = graph.project.id; entry.databaseId = graph.databaseId;
         entry.body = { parent: { database_id: graph.databaseId }, properties, children };
