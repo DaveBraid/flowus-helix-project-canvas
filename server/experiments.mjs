@@ -1,6 +1,6 @@
 import { stageNumbers } from './numbering.mjs';
 import { createHash } from 'node:crypto';
-import { ServiceError, plain, alive } from './flowus.mjs';
+import { ServiceError, plain, alive, graphRecords } from './flowus.mjs';
 
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 const textFields = ['rich_text', 'text_color', 'background_color', 'text_align'];
@@ -130,14 +130,13 @@ export class Experiments {
         const quotes = [];
         const sources = graph.nodes.filter(node => ids.includes(node.id)).sort((a, b) => a.number.localeCompare(b.number, 'zh-CN', { numeric: true }) || a.id.localeCompare(b.id));
         for (const source of sources) {
-          const { data: sourcePage, etag: sourceRevision } = await api.request('GET', `/pages/${source.id}`);
-          if (!alive(sourcePage) || sourcePage.parent?.database_id !== graph.databaseId || !sourceRevision || (source.revision && sourceRevision !== source.revision)) throw new ServiceError(409, '来源已移动或变化，请刷新，未创建实验');
+          const sourceRevision = source.revision || (await api.request('GET', `/pages/${source.id}`)).etag; // 刚查询的记录版本充当读取前快照。
           const blocks = await api.all('GET', `/blocks/${source.id}/children`);
           const focus = section(blocks, ['下一阶段聚焦问题']);
           const content = await copyBlocks(api, focus.blocks, budget);
           const url = `https://flowus.cn/${source.id}#${blocks[focus.start].id}`;
-          const { etag: confirmedSource } = await api.request('GET', `/pages/${source.id}`);
-          if (confirmedSource !== sourceRevision) throw new ServiceError(409, '继承期间来源已变化，未创建实验');
+          const { data: sourcePage, etag: confirmedSource } = await api.request('GET', `/pages/${source.id}`);
+          if (!sourceRevision || confirmedSource !== sourceRevision || !alive(sourcePage) || sourcePage.parent?.database_id !== graph.databaseId) throw new ServiceError(409, '继承期间来源已变化，未创建实验');
           quotes.push({ object: 'block', type: 'quote', quote: { rich_text: [richText(`来源：${source.title}`, url)] }, ...(content.length ? { children: content } : {}) });
         }
         const { etag: confirmedTemplate } = await api.request('GET', `/pages/${this.templateId}`);
@@ -149,6 +148,7 @@ export class Experiments {
         const number = stageNumbers({ nodes: [...graph.nodes, { id: pendingId, createdTime: new Date().toISOString() }], edges: [...graph.edges, ...ids.map(source => ({ source, target: pendingId }))] }).get(pendingId);
         const properties = { [titleField(db)]: { type: 'title', title: [richText(`${number}. ${title}`)] }, 来源实验: { type: 'relation', relation: ids.map(id => ({ id })) } };
         if (db.properties?.状态?.select?.options?.some(option => option.name === '计划中')) properties.状态 = { type: 'select', select: { name: '计划中' } };
+        entry.graph = graph;
         entry.projectId = graph.project.id; entry.databaseId = graph.databaseId;
         entry.body = { parent: { database_id: graph.databaseId }, properties, children };
         if (Buffer.byteLength(JSON.stringify(entry.body)) > 1024 * 1024) { delete entry.body; throw new ServiceError(413, '新实验正文超过 1 MB，未创建实验'); }
@@ -158,13 +158,25 @@ export class Experiments {
         const latest = await this.projects.load(slug);
         if (latest.project.id !== entry.projectId || latest.databaseId !== entry.databaseId) throw new ServiceError(409, '项目或实验表已变化，禁止重放原创建请求');
         validateSources(latest, ids);
+        delete entry.graph; // 未确认重试不复用旧图，交由完整协调确认。
       }
       entry.attempted = true;
       try {
         const { data, etag } = await api.request('POST', '/pages', entry.body, undefined, entry.idempotencyKey);
         if (!uuid(data?.id) || (data.parent?.database_id && data.parent.database_id !== entry.databaseId)) throw new ServiceError(503, '创建响应不完整');
         entry.result = { nodeId: data.id, revision: etag || pageRevision(data) };
-        delete entry.body;
+        // 仅完整真实响应且全图编号无需改写时，省去重复整图读取。
+        const props = data.properties;
+        if (entry.graph && !entry.graph.missingRelations && alive(data) && data.parent?.database_id === entry.databaseId && data.created_time && pageRevision(data)
+          && Object.values(props || {}).some(p => p.type === 'title') && Array.isArray(props?.来源实验?.relation) && !props.来源实验.has_more) {
+          const node = graphRecords([data]).nodes[0];
+          const expectedSources = [...node.sourceIds].sort();
+          const patch = { projectId: entry.projectId, databaseId: entry.databaseId, nodes: [...entry.graph.nodes, node],
+            edges: [...entry.graph.edges, ...ids.map(source => ({ id: `${source}:${data.id}`, source, target: data.id }))], missingRelations: 0 };
+          const numbers = stageNumbers(patch);
+          if (JSON.stringify(expectedSources) === JSON.stringify(ids) && patch.nodes.every(n => n.title.startsWith(`${numbers.get(n.id)}. `) && n.number === numbers.get(n.id))) entry.result.graphPatch = patch;
+        }
+        delete entry.graph; delete entry.body;
         this.projects.invalidate(slug); return entry.result;
       } catch (error) {
         this.projects.invalidate(slug);

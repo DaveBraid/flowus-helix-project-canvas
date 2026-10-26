@@ -141,3 +141,30 @@ test('新建一次写入预计连续编号，不重复读取实验表结构', as
   assert.equal(post.body.properties.实验内容.title[0].text.content,'4. 合并后的实验');
   assert(!calls.some(c=>c.path===`/databases/${dbId}`));
 });
+
+test('完整创建响应直接返回真实图；编号变化或响应不完整时回退协调', async () => {
+  for (const mode of ['append', 'branch', 'incomplete']) {
+    const f = fixture();
+    f.graph.nodes = f.graph.nodes.slice(0, 2).map((n, i) => ({ ...n, title: `${i + 1}. 实验`, createdTime: `2026-01-0${i + 1}T00:00:00Z` }));
+    const original = f.projects.api.request;
+    f.projects.api.request = async (method, path, body, ...rest) => {
+      const result = await original(method, path, body, ...rest);
+      if (method === 'POST' && mode !== 'incomplete') Object.assign(result.data, { properties: body.properties, created_time: '2026-10-26T02:00:00Z' });
+      return result;
+    };
+    const result = await f.projects.createExperiment('test', { ...input, sourceIds: [mode === 'branch' ? a : b] });
+    if (mode === 'append') {
+      assert.equal(result.graphPatch.nodes.at(-1).id, createdId);
+      assert.equal(result.graphPatch.nodes.at(-1).title, '3. 合并后的实验');
+      assert.equal(result.graphPatch.edges.at(-1).source, b);
+      assert.equal(f.calls.filter(c => c.path === `/pages/${b}`).length, 1);
+    } else assert.equal(result.graphPatch, undefined);
+  }
+});
+
+test('来源版本不一致时拒绝创建', async () => {
+  const f = fixture();
+  f.graph.nodes.find(n => n.id === b).revision = 'old';
+  await assert.rejects(f.projects.createExperiment('test', { ...input, sourceIds: [b] }), { status: 409 });
+  assert.equal(f.calls.some(c => c.method === 'POST'), false);
+});

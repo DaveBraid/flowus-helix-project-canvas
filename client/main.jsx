@@ -242,7 +242,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   }, [save]);
 
   /** 拉取项目关系；输入是否主动刷新，输出图数据且保留未保存坐标。 */
-  const refresh = useCallback(async (manual = false, focusId = null) => {
+  const refresh = useCallback(async (manual = false, focusId = null, suppliedGraph = null) => {
     if (loadingRef.current || savingRef.current) return;
     if (dirtyRef.current && !conflictRef.current) {
       if (manual) setNotice('布局尚未保存，保存完成后可刷新。');
@@ -253,6 +253,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
     try {
       // 先呈现短期内存快照；本次仍读取最新数据，不启动定时轮询。
       async function* updates() {
+        if (suppliedGraph) { yield suppliedGraph; return; } // 创建响应已确认编号，直接绘制真实记录。
         if (!graphRef.current) {
           const preview = await request(`${endpoint}/preview`);
           if (preview) yield { ...preview, preview: true };
@@ -370,7 +371,11 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
         result = await request(`${endpoint}/experiments/${encodeURIComponent(payload.nodeId)}`, { method: 'PATCH', headers: { 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify({ ...patch, revision: node?.data.revision }) });
       }
       setEditor(null); // 已确认写入后立即结束表单；刷新失败不能诱发重复创建。
-      const refreshed = await refresh(true, type === 'create' ? result.nodeId || result.node?.id : null);
+      const patch = type === 'create' ? result.graphPatch : null;
+      const current = graphRef.current;
+      const confirmed = patch && patch.projectId === current?.project.id && patch.databaseId === current?.databaseId
+        ? { ...current, nodes: patch.nodes, edges: patch.edges, missingRelations: patch.missingRelations } : null;
+      const refreshed = await refresh(true, type === 'create' ? result.nodeId || result.node?.id : null, confirmed);
       if (!refreshed) setNotice('实验已保存，但关系图刷新失败。请点击刷新确认，勿重复新增。');
     } catch (failure) {
       if (failure.status === 401) { onExpired(); return; }

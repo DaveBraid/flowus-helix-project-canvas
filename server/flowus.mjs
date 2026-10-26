@@ -141,7 +141,7 @@ export class Projects {
   }
   async load(slug, { relations = true, forCreate = false } = {}) {
     const match = await this.resolve(slug);
-    const { data: page, etag } = await this.api.request('GET', `/pages/${match.id}`);
+    const { data: page, etag } = forCreate ? { data: match } : await this.api.request('GET', `/pages/${match.id}`); // 创建复用刚查询的项目记录。
     if (!alive(page)) throw new ServiceError(404, '项目不存在');
     const blocks = await this.api.all('GET', `/blocks/${page.id}/children`);
     const candidates = [];
