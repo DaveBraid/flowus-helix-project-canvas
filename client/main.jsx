@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useId, useMemo, memo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
-import { ReactFlow, ReactFlowProvider, Background, BaseEdge, Handle, Position, ViewportPortal, applyNodeChanges, useReactFlow } from '@xyflow/react';
+import { ReactFlow, ReactFlowProvider, Background, BaseEdge, Handle, Position, ViewportPortal, applyNodeChanges, useReactFlow, useStore } from '@xyflow/react';
 import { Plus, GitBranch, Trash2, Palette, X, ZoomIn, ZoomOut, Scan, Network, RefreshCw, ExternalLink, LogOut, LoaderCircle, LockKeyhole, ArrowUpRight, RotateCcw, Lightbulb, Play, NotebookPen, CircleCheckBig, Pause, CircleX, Circle } from 'lucide-react';
 import '@xyflow/react/dist/style.css';
 import './style.css';
@@ -9,7 +9,7 @@ import './style.css';
 import { WIDTH, HEIGHT, lineageFocus, orderSavedPositions, edgeRoute, canvasBounds } from './graph.mjs';
 import { arrange } from './graph.mjs';
 import ExperimentEditor from './ExperimentEditor.jsx';
-import { readViewport, writeViewport } from './viewport.mjs';
+import { readViewport, writeViewport, zoomLimit } from './viewport.mjs';
 
 /** 监听浏览器实际主题；输入无，输出亮暗模式，兼容系统与宿主提供的色彩方案。 */
 function useColorScheme() {
@@ -189,6 +189,12 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   const previewConnection = useCallback((sourceId, point) => setConnectionPreview(sourceId ? { sourceId, point } : null), []);
   const closePicker = useCallback(() => setPickerOpen(false), []);
   const flow = useReactFlow();
+  const maxZoom = useStore(state => zoomLimit(state.width, state.height));
+  const maxZoomRef = useRef(maxZoom);
+  maxZoomRef.current = maxZoom;
+  useEffect(() => {
+    if (flow.getZoom() > maxZoom) flow.zoomTo(maxZoom, { duration: 0 }); // 窗口变小时收紧倍率，不触发数据刷新。
+  }, [flow, maxZoom]);
   const graphRef = useRef(null);
   const nodesRef = useRef([]);
   const revisionRef = useRef(null);
@@ -296,9 +302,9 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
         requestAnimationFrame(() => requestAnimationFrame(async () => {
           if (viewportTouchedRef.current && !focusId) { viewportReadyRef.current = true; return; } // 迟到数据不抢走用户已移动的视口。
           const focus = next.find(node => node.id === (focusId || new URLSearchParams(location.search).get('node')));
-          if (focus) await flow.fitView({ nodes: [focus], padding: 0.24, duration: 0, maxZoom: 1.1 });
-          else if (restoredViewport) await flow.setViewport(restoredViewport);
-          else await flow.fitBounds(canvasBounds(next, nextEdges), { padding: 0.12, duration: 0, maxZoom: 1.1 });
+          if (focus) await flow.fitView({ nodes: [focus], padding: 0.24, duration: 0, maxZoom: maxZoomRef.current });
+          else if (restoredViewport && restoredViewport.zoom <= maxZoomRef.current) await flow.setViewport(restoredViewport);
+          else await flow.fitBounds(canvasBounds(next, nextEdges), { padding: 0.12, duration: 0 });
           viewportReadyRef.current = true;
         }));
       }
@@ -330,7 +336,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   async function relayout() {
     if (!graphRef.current || busy || conflictRef.current || layoutWarningRef.current) return;
     setBusy(true);
-    try { const positions = await arrange(graphRef.current); const next = nodesRef.current.map(node => ({ ...node, position: positions[node.id] })); changed(next); requestAnimationFrame(() => flow.fitBounds(canvasBounds(next, graphRef.current.edges), { padding: 0.12, duration: 250, maxZoom: 1.1 })); }
+    try { const positions = await arrange(graphRef.current); const next = nodesRef.current.map(node => ({ ...node, position: positions[node.id] })); changed(next); requestAnimationFrame(() => flow.fitBounds(canvasBounds(next, graphRef.current.edges), { padding: 0.12, duration: 250 })); }
     catch { setNotice('自动排列失败，请稍后重试。'); }
     finally { setBusy(false); }
   }
@@ -386,7 +392,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   const displayNodes = useMemo(() => nodes.map(node => ({ ...node, data: { ...node.data, dimmed: Boolean(focus && !focus.nodes.has(node.id)), onAction: openEditor, onConnectionPreview: previewConnection, readOnly } })), [nodes, focus, readOnly, openEditor, previewConnection]);
   const displayEdges = useMemo(() => edges.map((edge, lane) => ({ ...edge, data: { nodes, lane, dimmed: Boolean(focus && !focus.links.has(edge.id)) } })), [edges, focus, nodes]);
   return <main className="canvas-shell" style={{ '--project-color': cardColor }}>
-    <ReactFlow onNodeMouseEnter={(_, node) => setHovered(node.id)} onNodeMouseLeave={() => setHovered(null)} onPaneClick={() => setHovered(null)} nodes={displayNodes} edges={displayEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} colorMode={colorScheme} onNodesChange={changes => { const next = applyNodeChanges(changes, nodesRef.current); nodesRef.current = next; setNodes(next); }} onMoveStart={event => { if (event) { viewportTouchedRef.current = true; viewportReadyRef.current = true; } }} onMoveEnd={(_event, viewport) => { if (viewportReadyRef.current) writeViewport(graphRef.current?.project.id, viewport); }} nodesDraggable={false} nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null} minZoom={0.1} maxZoom={2.5} proOptions={{ hideAttribution: true }}>
+    <ReactFlow onNodeMouseEnter={(_, node) => setHovered(node.id)} onNodeMouseLeave={() => setHovered(null)} onPaneClick={() => setHovered(null)} nodes={displayNodes} edges={displayEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} colorMode={colorScheme} onNodesChange={changes => { const next = applyNodeChanges(changes, nodesRef.current); nodesRef.current = next; setNodes(next); }} onMoveStart={event => { if (event) { viewportTouchedRef.current = true; viewportReadyRef.current = true; } }} onMoveEnd={(_event, viewport) => { if (viewportReadyRef.current) writeViewport(graphRef.current?.project.id, viewport); }} nodesDraggable={false} nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null} minZoom={0.1} maxZoom={maxZoom} proOptions={{ hideAttribution: true }}>
       {connectionPreview && <ViewportPortal><svg className="connection-preview"><path d={(() => { const source = nodes.find(item => item.id === connectionPreview.sourceId), point = flow.screenToFlowPosition(connectionPreview.point); return source ? `M ${source.position.x + WIDTH} ${source.position.y + HEIGHT / 2} C ${source.position.x + WIDTH + 54} ${source.position.y + HEIGHT / 2}, ${point.x - 54} ${point.y}, ${point.x} ${point.y}` : ''; })()}/></svg></ViewportPortal>}
       <Background gap={28} size={1} color="var(--grid)" bgColor="var(--canvas)"/>
     </ReactFlow>
@@ -398,7 +404,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
     <div className="toolbar" role="toolbar" aria-label="关系图工具">
       <Tool label="放大" onClick={() => flow.zoomIn({ duration: 150 })}><ZoomIn size={18}/></Tool>
       <Tool label="缩小" onClick={() => flow.zoomOut({ duration: 150 })}><ZoomOut size={18}/></Tool>
-      <Tool label="适应画布" onClick={() => flow.fitBounds(canvasBounds(nodesRef.current, edges), { padding: 0.12, duration: 250, maxZoom: 1.1 })}><Scan size={18}/></Tool>
+      <Tool label="适应画布" onClick={() => flow.fitBounds(canvasBounds(nodesRef.current, edges), { padding: 0.12, duration: 250 })}><Scan size={18}/></Tool>
       <span className="divider"/>
       <Tool label="新增实验" disabled={busy || phase !== 'ready' || conflictRef.current || layoutWarningRef.current} onClick={() => openEditor({ type: 'create' })}><Plus size={18}/></Tool>
       <Tool label="卡片颜色" aria-expanded={pickerOpen} disabled={phase !== 'ready' || busy || conflictRef.current || layoutWarningRef.current} onClick={() => setPickerOpen(open => !open)}><Palette size={17}/></Tool>

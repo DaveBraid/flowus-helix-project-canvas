@@ -12,3 +12,9 @@ export function writeViewport(projectId, viewport, storage) {
   if (!projectId || ![viewport.x, viewport.y, viewport.zoom].every(Number.isFinite) || Math.abs(viewport.x) > 1e6 || Math.abs(viewport.y) > 1e6 || viewport.zoom < .1 || viewport.zoom > 2.5) return;
   try { (storage || globalThis.localStorage).setItem(`helix:viewport:${projectId}`, JSON.stringify({ schemaVersion: 1, x: viewport.x, y: viewport.y, zoom: viewport.zoom })); } catch {} // iframe 存储受限或空间不足时安全降级。
 }
+import { WIDTH, HEIGHT } from './graph.mjs';
+
+/** 按窗口限制单卡显示尺寸；大窗口最多原尺寸的 1.1 倍，小窗口保留周围空白。 */
+export function zoomLimit(width, height) {
+  return width > 0 && height > 0 ? Math.max(.1, Math.min(1.1, width * .75 / WIDTH, height * .55 / HEIGHT)) : 1.1;
+}

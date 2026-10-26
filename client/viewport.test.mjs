@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readViewport, writeViewport } from './viewport.mjs';
+import { readViewport, writeViewport, zoomLimit } from './viewport.mjs';
 
 test('视口按稳定项目 ID 隔离，只保存位置与缩放', () => {
   const values = new Map(), storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
@@ -22,4 +22,12 @@ test('存储拒绝、配额不足及无效缓存均安全降级', () => {
  test('拒绝写入越界观看位置', () => {
   const storage = { setItem() { assert.fail('越界视口不得写入'); } };
   for (const viewport of [{ x: 1e6 + 1, y: 0, zoom: 1 }, { x: 0, y: -1e6 - 1, zoom: 1 }, { x: 0, y: 0, zoom: 3 }]) writeViewport('p', viewport, storage);
+});
+
+ test('缩放上限随窗口收紧，大窗口单卡也不超过1.1倍', () => {
+  assert.equal(zoomLimit(1200, 800), 1.1);
+  assert.equal(zoomLimit(0, 0), 1.1);
+  assert.ok(248 * zoomLimit(320, 180) <= 320 * .75);
+  assert.ok(128 * zoomLimit(320, 180) <= 180 * .55);
+  assert.ok(zoomLimit(640, 200) < zoomLimit(640, 400));
 });
