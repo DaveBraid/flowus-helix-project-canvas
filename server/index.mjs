@@ -6,6 +6,7 @@ import { Auth, verifyPassword } from './auth.mjs';
 import { FlowUs, Projects, ServiceError, secret, validSlug } from './flowus.mjs';
 import { startUrlSync } from './sync.mjs';
 import { CliOAuth } from './oauth.mjs';
+import { reconcileNumbers } from './numbering.mjs';
 
 /** 读取有大小限制的 JSON 请求，避免无界内存分配。 */
 async function jsonBody(req) {
@@ -62,6 +63,17 @@ export function createApp({ auth, projects, origin, dist = resolve(dirname(fileU
         if (!session) throw new ServiceError(401, '请先登录');
         if (!['GET', 'HEAD'].includes(req.method) && !auth.csrf(session, req.headers['x-csrf-token'])) throw new ServiceError(403, '会话校验失败，请重新登录');
         if (path === '/api/logout' && req.method === 'POST') { res.setHeader('Set-Cookie', auth.cookie('', true)); return send(res, 200, { ok: true }); }
+        const reconcile = path.match(/^\/api\/projects\/([^/]+)\/reconcile$/);
+        if (reconcile && req.method === 'POST') {
+          const slug = decodeURIComponent(reconcile[1]);
+          return send(res, 200, await projects.withMutation(slug, () => reconcileNumbers(projects, slug)));
+        }
+        const experiment = path.match(/^\/api\/projects\/([^/]+)\/experiments(?:\/([^/]+))?$/);
+        if (experiment) {
+          const slug = decodeURIComponent(experiment[1]);
+          if (!experiment[2] && req.method === 'POST') return send(res, 201, await projects.createExperiment(slug, await jsonBody(req)));
+          if (experiment[2] && req.method === 'PATCH') return send(res, 200, await projects.updateExperiment(slug, decodeURIComponent(experiment[2]), await jsonBody(req)));
+        }
         const match = path.match(/^\/api\/projects\/([^/]+)\/(graph|layout|preview)$/);
         if (match) {
           const slug = decodeURIComponent(match[1]);
@@ -84,7 +96,7 @@ export function createApp({ auth, projects, origin, dist = resolve(dirname(fileU
       const data = await readFile(file); res.writeHead(200, { 'Content-Type': mime }); res.end(req.method === 'HEAD' ? undefined : data);
     } catch (error) {
       const status = error instanceof ServiceError ? error.status : error instanceof URIError ? 400 : error.code === 'ENOENT' ? 404 : 500;
-      send(res, status, { error: status === 500 ? '服务发生错误，请稍后重试' : error.message });
+      send(res, status, { error: status === 500 ? '服务发生错误，请稍后重试' : error.message, ...(error instanceof ServiceError && error.details ? error.details : {}) });
     }
   });
 }

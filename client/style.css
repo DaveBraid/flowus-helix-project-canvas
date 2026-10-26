@@ -172,3 +172,48 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .color-channel input[type=number]{width:49px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px;font-size:11px}
 .color-picker footer button{background:transparent;border:0;color:var(--muted);font-size:11px;padding:5px}
 @media(max-width:400px){.color-picker{top:58px;right:10px}.toolbar .tool{width:28px}}
+
+/* 复用 Ob Helix 的悬停底部操作条，保留原卡片尺寸与关系摘要。 */
+.node-meta > .hint-trigger { min-width: 0; }
+button.status { border: 0; cursor: pointer; }
+button.status:hover:enabled { background: color-mix(in srgb, currentColor 7%, transparent); }
+.node-actions { position: absolute; left: 8px; right: 8px; bottom: 7px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); min-height: 30px; border-radius: 7px; background: color-mix(in srgb, var(--project-color) 8%, var(--surface)); opacity: 0; pointer-events: none; transition: opacity .14s; }
+.node-actions .hint-trigger { min-width: 0; }
+.node-actions button { display: inline-flex; width: 100%; height: 30px; min-width: 0; align-items: center; justify-content: center; gap: 4px; padding: 0 5px; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 10px; line-height: 1; }
+.node-actions .hint-trigger + .hint-trigger { border-left: 1px solid color-mix(in srgb, var(--project-color) 15%, transparent); }
+.node-actions button:hover:enabled { background: color-mix(in srgb, var(--project-color) 13%, transparent); color: var(--text); }
+.node-actions .node-delete:hover:enabled { color: var(--error); }
+.experiment:hover .node-actions, .experiment:focus-within .node-actions, .experiment.selected .node-actions { opacity: 1; pointer-events: auto; }
+.experiment:hover .node-relations, .experiment:focus-within .node-relations, .experiment.selected .node-relations { opacity: 0; }
+.connection-preview { position: absolute; overflow: visible; width: 1px; height: 1px; pointer-events: none; }
+.connection-preview path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 7 5; }
+.experiment-editor { width: 390px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); padding: 16px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); font: inherit; overflow: auto; }
+.experiment-editor::backdrop { background: #0005; }
+.experiment-editor header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.experiment-editor h2 { margin: 0; font-size: 15px; font-weight: 650; }
+.experiment-editor p { font-size: 12px; line-height: 1.7; }
+.editor-field { display: grid; gap: 7px; margin: 10px 0; font-size: 12px; }
+.editor-field input, .editor-field select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.editor-note { color: var(--muted); font-size: 11px !important; line-height: 1.6; }
+.experiment-editor fieldset { min-width: 0; margin: 14px 0; padding: 9px; border: 1px solid var(--border); border-radius: 7px; }
+.experiment-editor legend { padding: 0 5px; font-size: 11px; }
+.source-options { display: grid; gap: 7px; max-height: 165px; overflow: auto; }
+.source-options label { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.source-options input { accent-color: var(--accent); flex-shrink: 0; }
+.editor-primary { display: flex; justify-content: center; align-items: center; gap: 7px; width: 100%; min-height: 36px; margin-top: 14px; padding: 8px 10px; border: 0; border-radius: 7px; background: var(--accent); color: var(--on-accent); text-decoration: none; font-size: 12px; }
+.delete-impact ul { max-height: 130px; overflow: auto; font-size: 12px; line-height: 1.8; padding-left: 20px; }
+.status-editor { width: 218px; margin: 0; padding: 8px; }
+.status-editor::backdrop { background: transparent; }
+.status-editor header { margin-bottom: 4px; padding-left: 5px; }
+.status-editor h2 { font-size: 12px; }
+.status-option { width: 100%; display: flex; align-items: center; gap: 9px; padding: 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text); font-size: 12px; text-align: left; }
+.status-option:hover, .status-option:focus-visible, .status-option[aria-checked=true] { background: var(--surface-hover); }
+.status-option span { flex: 1; }
+@media (hover: none) { .node-actions { opacity: 1; pointer-events: auto; } .node-relations { opacity: 0; } }
+
+.status-option.is-idea { color: var(--status-idea); }
+.status-option.is-active { color: var(--status-active); }
+.status-option.is-recording { color: var(--status-recording); }
+.status-option.is-completed { color: var(--status-completed); }
+.status-option.is-paused { color: var(--status-paused); }
+.status-option.is-terminated { color: var(--status-terminated); }

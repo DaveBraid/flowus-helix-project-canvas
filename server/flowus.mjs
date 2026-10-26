@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { Experiments, pageRevision } from './experiments.mjs';
 
 export class ServiceError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, details) { super(message); this.status = status; this.details = details; }
 }
 export const plain = value => (value || []).map(x => x.plain_text ?? x.text?.content ?? '').join('');
 export const property = (page, name) => page.properties?.[name];
@@ -20,7 +21,7 @@ export class FlowUs {
     this.tokenProvider = tokenProvider;
     this.queue = Promise.resolve(); this.next = 0;
   }
-  async request(method, path, body, revision) {
+  async request(method, path, body, revision, idempotencyKey) {
     const task = async () => {
       let token = this.tokenProvider ? await this.tokenProvider.getToken() : this.token;
       let refreshed = false;
@@ -31,7 +32,7 @@ export class FlowUs {
         try {
           response = await this.fetch(`${this.base}/v2${path}`, {
             method, signal: AbortSignal.timeout(20000),
-            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(revision ? { 'If-Match': revision } : {}) },
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(revision ? { 'If-Match': revision } : {}), ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           });
         } catch { throw new ServiceError(503, 'FlowUs 暂时无法连接，请稍后重试'); }
@@ -82,7 +83,7 @@ export function graphRecords(records) {
     const title = plain(Object.values(props).find(p => p.type === 'title')?.title) || '未命名实验';
     const formula = props['编号']?.formula;
     const number = formula?.string ?? formula?.number ?? title.split(/\s/)[0].replace(/\.$/, '');
-    return { id: record.id, title, number: String(number ?? ''), status: props['状态']?.select?.name || '', url: `https://flowus.cn/${record.id}` };
+    return { id: record.id, title, number: String(number ?? ''), status: props['状态']?.select?.name || '', createdTime: record.created_time, revision: pageRevision(record), sourceIds: (props['来源实验']?.relation || []).map(source => source.id), url: `https://flowus.cn/${record.id}` };
   });
   const edges = []; const seen = new Set(); let missingRelations = 0;
   for (const record of current) for (const source of record.properties?.['来源实验']?.relation || []) {
@@ -101,7 +102,22 @@ export class Projects {
     this.slugField = options.slugField || '项目 URL 名'; this.layoutField = options.layoutField || 'Canvas 状态';
     this.cache = new Map(); this.pending = new Map(); this.ttl = options.ttl ?? 30000;
     this.allowed = options.allowed || []; this.publicOrigin = options.publicOrigin || '';
+    this.mutations = new Map(); this.cacheVersions = new Map();
+    this.experiments = new Experiments(this, options.templateId ?? process.env.FLOWUS_EXPERIMENT_TEMPLATE_ID ?? '');
   }
+  /** 项目内写操作串行；失败仍释放队列，编号维护共用此入口。 */
+  async withMutation(slug, operation) {
+    const previous = this.mutations.get(slug) || Promise.resolve();
+    const pending = previous.catch(() => {}).then(operation); this.mutations.set(slug, pending);
+    try { return await pending; } finally { if (this.mutations.get(slug) === pending) this.mutations.delete(slug); }
+  }
+  /** 写入后丢弃旧快照；先前并发读取不能回填过期图。 */
+  invalidate(slug) {
+    this.cache.delete(slug); this.pending.delete(slug);
+    this.cacheVersions.set(slug, (this.cacheVersions.get(slug) || 0) + 1);
+  }
+  createExperiment(slug, input) { return this.experiments.create(slug, input); }
+  updateExperiment(slug, id, input) { return this.experiments.update(slug, id, input); }
   async resolve(slug) {
     if (!validSlug(slug)) throw new ServiceError(404, '项目不存在');
     const matches = (await this.api.all('POST', `/databases/${this.database}/query`, { filter: { property: this.slugField, rich_text: { equals: slug } } })).filter(alive);
@@ -118,9 +134,10 @@ export class Projects {
   async graph(slug, fresh = false) {
     if (!fresh && this.cache.get(slug)?.until > Date.now()) return this.cache.get(slug).value;
     if (this.pending.has(slug)) return this.pending.get(slug);
-    const pending = this.load(slug).then(value => { this.cache.set(slug, { value, until: Date.now() + this.ttl }); if(this.cache.size>100)this.cache.delete(this.cache.keys().next().value); return value; });
+    const version = this.cacheVersions.get(slug) || 0;
+    const pending = this.load(slug).then(value => { if ((this.cacheVersions.get(slug) || 0) === version) this.cache.set(slug, { value, until: Date.now() + this.ttl }); if(this.cache.size>100)this.cache.delete(this.cache.keys().next().value); return value; });
     this.pending.set(slug, pending);
-    try { return await pending; } finally { this.pending.delete(slug); }
+    try { return await pending; } finally { if (this.pending.get(slug) === pending) this.pending.delete(slug); }
   }
   async load(slug, { relations = true } = {}) {
     const match = await this.resolve(slug);
@@ -167,7 +184,7 @@ export class Projects {
         } else layoutWarning = '画布所属项目或实验表不匹配，未覆盖原数据';
       } catch { layoutWarning = '画布状态格式有误，未覆盖原数据'; }
     }
-    return { project: { id: page.id, title: plain(Object.values(page.properties).find(p => p.type === 'title')?.title), slug }, nodes, edges, layout, revision: etag, databaseId: db.id, layoutWarning, missingRelations };
+    return { project: { id: page.id, title: plain(Object.values(page.properties).find(p => p.type === 'title')?.title), slug }, nodes, edges, statusOptions: (db.properties?.['状态']?.select?.options || []).map(option => option.name), layout, revision: etag, databaseId: db.id, layoutWarning, missingRelations };
   }
   /** 原位更新同一画布属性；输入坐标和旧版本，输出确认后的持久状态。 */
   async save(slug, { revision, positions, cardColor }) {
@@ -184,7 +201,7 @@ export class Projects {
       if (!ids.has(id) || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y) || Math.abs(point.x) > 1e6 || Math.abs(point.y) > 1e6) throw new ServiceError(400, '坐标含无效或不属于本项目的节点');
       normalized[id] = { x: Math.round(point.x), y: Math.round(point.y) };
     }
-    // urlSlug 由链接同步任务推进，普通保存必须保留最后同步地址。
+    // urlSlug 只记录已完成同步的地址；颜色保存不能抢先确认嵌入已迁移。
     const layout = { schemaVersion: 1, ownerProjectId: graph.project.id, experimentDatabaseId: graph.databaseId, urlSlug: validSlug(graph.layout?.urlSlug) ? graph.layout.urlSlug : slug, nodes: normalized };
     const savedColor = cardColor ?? graph.layout?.cardColor; // 老客户端保存坐标时保留已有颜色。
     if (savedColor !== undefined) layout.cardColor = savedColor.toLowerCase();
@@ -194,7 +211,7 @@ export class Projects {
     // 分段承载文本，更新仍为单次页面 PATCH，不上传附件。
     const richText = Array.from({ length: Math.ceil(content.length / 1800) }, (_, i) => ({ type: 'text', text: { content: content.slice(i * 1800, (i + 1) * 1800) } }));
     await this.api.request('PATCH', `/pages/${graph.project.id}`, { properties: { [this.layoutField]: { type: 'rich_text', rich_text: richText } } }, revision);
-    this.cache.delete(slug);
+    this.invalidate(slug);
     const { data: saved, etag } = await this.api.request('GET', `/pages/${graph.project.id}`);
     const savedProperty = property(saved, this.layoutField);
     let confirmed = plain(savedProperty?.rich_text);

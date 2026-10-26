@@ -1,13 +1,15 @@
 import React, { useState, useRef, useEffect, useCallback, useId, useMemo, memo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
-import { ReactFlow, ReactFlowProvider, Background, BaseEdge, Handle, Position, applyNodeChanges, useReactFlow } from '@xyflow/react';
-import { Palette, X, ZoomIn, ZoomOut, Scan, Network, RefreshCw, ExternalLink, LogOut, LoaderCircle, LockKeyhole, ArrowUpRight, RotateCcw, Lightbulb, Play, NotebookPen, CircleCheckBig, Pause, CircleX, Circle } from 'lucide-react';
+import { ReactFlow, ReactFlowProvider, Background, BaseEdge, Handle, Position, ViewportPortal, applyNodeChanges, useReactFlow } from '@xyflow/react';
+import { Plus, GitBranch, Trash2, Palette, X, ZoomIn, ZoomOut, Scan, Network, RefreshCw, ExternalLink, LogOut, LoaderCircle, LockKeyhole, ArrowUpRight, RotateCcw, Lightbulb, Play, NotebookPen, CircleCheckBig, Pause, CircleX, Circle } from 'lucide-react';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 
 import { WIDTH, HEIGHT, lineageFocus, orderSavedPositions, edgeRoute, canvasBounds } from './graph.mjs';
 import { arrange } from './graph.mjs';
+import ExperimentEditor from './ExperimentEditor.jsx';
+import { readViewport, writeViewport } from './viewport.mjs';
 
 /** 监听浏览器实际主题；输入无，输出亮暗模式，兼容系统与宿主提供的色彩方案。 */
 function useColorScheme() {
@@ -51,20 +53,32 @@ const edgeTypes = { helix: HelixEdge };
 async function request(path, options = {}) {
   const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...options.body && { 'Content-Type': 'application/json' }, ...options.headers } });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(payload.message || payload.error || `请求失败（${response.status}）`), { status: response.status });
+  if (!response.ok) throw Object.assign(new Error(payload.message || payload.error || `请求失败（${response.status}）`), { status: response.status, retrySameRequest: payload.retrySameRequest });
   return payload;
 }
 
 /** 展示实验节点；输入标题和状态，输出可打开原页面的节点卡片。 */
-const ExperimentNode = memo(function ExperimentNode({ data, selected }) {
+const ExperimentNode = memo(function ExperimentNode({ id, data, selected }) {
+  const drag = useRef(null);
+  const suppressClick = useRef(false);
   const { Icon, tone } = statusAppearance(data.status);
   const title = data.number ? data.title.replace(new RegExp(`^${data.number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[.]?\\s+`), '') : data.title;
   return <article className={`experiment ${selected ? 'selected' : ''} ${data.dimmed ? 'lineage-dimmed' : ''}`}>
     <Handle type="target" position={Position.Left} isConnectable={false}/>
-    <div className="node-meta"><span className="number">阶段 {data.number || '—'}</span><span className={`status is-${tone}`}><Icon size={12} aria-hidden="true"/><span>{data.status || '未设置状态'}</span></span></div>
+    <div className="node-meta"><span className="number">阶段 {data.number || '—'}</span><Hint label="修改实验状态"><button type="button" className={`status nodrag nopan is-${tone}`} disabled={data.readOnly} aria-label={`修改 ${data.title} 的状态`} onClick={event => { event.stopPropagation(); data.onAction({ type: 'status', nodeId: id, anchor: event.currentTarget.getBoundingClientRect() }); }}><Icon size={12} aria-hidden="true"/><span>{data.status || '未设置状态'}</span></button></Hint></div>
     <a className="node-title nodrag nopan" href={data.url} target="_top" title="在 FlowUs 中打开">{title || '未命名实验'}</a>
     <div className="node-project">{data.projectTitle}</div>
     <div className="node-relations">{data.incoming ? `来源 ${data.incoming}` : '起始阶段'}{data.outgoing > 0 ? `　后续 ${data.outgoing}` : ''}</div>
+    <div className="node-actions nodrag nopan" aria-label="实验操作">
+      <Hint label="从此实验新增后续实验"><button type="button" disabled={data.readOnly} aria-label={`从 ${data.title} 新增实验`} onClick={event => { event.stopPropagation(); data.onAction({ type: 'create', sourceId: id }); }}><Plus size={13}/><span>新增</span></button></Hint>
+      <Hint label="拖到其他实验连接；点击选择目标"><button type="button" disabled={data.readOnly} aria-label={`从 ${data.title} 连接已有实验`}
+        onPointerDown={event => { if (event.button !== 0) return; event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, moved: false }; }}
+        onPointerMove={event => { if (!drag.current) return; if (Math.hypot(event.clientX - drag.current.x, event.clientY - drag.current.y) > 5) drag.current.moved = true; if (drag.current.moved) data.onConnectionPreview(id, { x: event.clientX, y: event.clientY }); }}
+        onPointerUp={event => { const pending = drag.current; drag.current = null; if (!pending) return; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); data.onConnectionPreview(null); if (pending.moved) { suppressClick.current = true; const targetId = document.elementFromPoint(event.clientX, event.clientY)?.closest('.react-flow__node')?.dataset.id; if (targetId && targetId !== id) data.onAction({ type: 'connect', sourceId: id, targetId }); } }}
+        onPointerCancel={() => { drag.current = null; data.onConnectionPreview(null); }}
+        onClick={event => { event.stopPropagation(); if (suppressClick.current) { suppressClick.current = false; return; } data.onAction({ type: 'connect', sourceId: id }); }}><GitBranch size={13}/><span>连接</span></button></Hint>
+      <Hint label="查看影响并前往 FlowUs 删除"><button type="button" disabled={data.readOnly} className="node-delete" aria-label={`删除实验 ${data.title}`} onClick={event => { event.stopPropagation(); data.onAction({ type: 'delete', nodeId: id }); }}><Trash2 size={13}/><span>删除</span></button></Hint>
+    </div>
     <Handle type="source" position={Position.Right} isConnectable={false}/>
   </article>;
 });
@@ -164,6 +178,15 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   const [cardColor, setCardColor] = useState('#808080');
   const colorRef = useRef('#808080');
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [editor, setEditor] = useState(null);
+  const [connectionPreview, setConnectionPreview] = useState(null);
+  const [statusOptions, setStatusOptions] = useState([]);
+  const mutationRef = useRef(false);
+  const viewportProjectRef = useRef(null);
+  const viewportReadyRef = useRef(false);
+  const viewportTouchedRef = useRef(false);
+  const openEditor = useCallback(value => { setPickerOpen(false); setHovered(null); setEditor(value); }, []);
+  const previewConnection = useCallback((sourceId, point) => setConnectionPreview(sourceId ? { sourceId, point } : null), []);
   const closePicker = useCallback(() => setPickerOpen(false), []);
   const flow = useReactFlow();
   const graphRef = useRef(null);
@@ -177,7 +200,6 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   const layoutWarningRef = useRef(false);
   const loadingRef = useRef(false);
   const timerRef = useRef(null);
-  const firstRef = useRef(true);
   const versionRef = useRef(0);
   const endpoint = `/api/projects/${encodeURIComponent(slug)}`;
 
@@ -214,7 +236,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
   }, [save]);
 
   /** 拉取项目关系；输入是否主动刷新，输出图数据且保留未保存坐标。 */
-  const refresh = useCallback(async (manual = false) => {
+  const refresh = useCallback(async (manual = false, focusId = null) => {
     if (loadingRef.current || savingRef.current) return;
     if (dirtyRef.current && !conflictRef.current) {
       if (manual) setNotice('布局尚未保存，保存完成后可刷新。');
@@ -229,9 +251,20 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
           const preview = await request(`${endpoint}/preview`);
           if (preview) yield { ...preview, preview: true };
         }
-        yield await request(`${endpoint}/graph?fresh=1`);
+        layoutWarningRef.current = true; // 编号协调完成前禁写，失败保留当前图。
+        try {
+          const reconciled = await request(`${endpoint}/reconcile`, { method: 'POST', headers: { 'X-CSRF-Token': session.csrfToken }, body: '{}' });
+          if (!reconciled.graph?.project || !Array.isArray(reconciled.graph.nodes) || !Array.isArray(reconciled.graph.edges)) throw new Error('编号协调未返回完整关系图');
+          yield reconciled.graph;
+        } catch (failure) {
+          failure.reconcile = true;
+          if ([401, 403].includes(failure.status) || graphRef.current) throw failure;
+          const original = await request(`${endpoint}/graph?fresh=1`); // 编号不可协调时仍允许首次只读查看，不能据此改写原图。
+          yield { ...original, readOnlyError: failure.message };
+        }
       }
       for await (const graph of updates()) {
+      setStatusOptions(Array.isArray(graph.statusOptions) ? graph.statusOptions.filter(option => typeof option === 'string') : []);
       const restoredColor = /^#[0-9a-f]{6}$/i.test(graph.layout?.cardColor || '') ? graph.layout.cardColor : '#808080';
       colorRef.current = restoredColor; setCardColor(restoredColor);
       const oldPositions = Object.fromEntries(nodesRef.current.map(node => [node.id, node.position]));
@@ -250,26 +283,34 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
       graphRef.current = graph;
       if (!dirtyRef.current || conflictRef.current) revisionRef.current = graph.revision; // 拉取期间若发生拖动，保留旧版本以检测并发修改。
       conflictRef.current = false;
-      layoutWarningRef.current = Boolean(graph.layoutWarning || graph.preview);
+      layoutWarningRef.current = Boolean(graph.layoutWarning || graph.preview || graph.readOnlyError);
       nodesRef.current = next; setNodes(next); setEdges(nextEdges); setProject(graph.project); setPhase('ready');
-      setNotice(graph.preview ? '正在显示缓存，正在获取最新数据…' : graph.layoutWarning ? `${graph.layoutWarning} 已暂停布局保存，避免覆盖。` : graph.missingRelations ? `有 ${graph.missingRelations} 条关系的目标不可访问，暂未显示。` : '');
+      setNotice(graph.readOnlyError ? `编号协调未完成：${graph.readOnlyError} 当前关系图仅供查看，编辑已停用。可点击刷新重试。` : graph.preview ? '正在显示缓存，正在获取最新数据…' : graph.layoutWarning ? `${graph.layoutWarning} 已暂停布局保存，避免覆盖。` : graph.missingRelations ? `有 ${graph.missingRelations} 条关系的目标不可访问，暂未显示。` : '');
       // 打开或刷新只更新显示，自动生成的坐标由手动排列或后续编辑保存。
       if (manual) { dirtyRef.current = false; setSaveState(''); }
-      if (firstRef.current || manual) {
-        if (!graph.preview) firstRef.current = false;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          const focus = next.find(node => node.selected);
-          if (focus) flow.fitView({ nodes: [focus], padding: 0.24, duration: 250, maxZoom: 1.1 });
-          else flow.fitBounds(canvasBounds(next, nextEdges), { padding: 0.12, duration: 250, maxZoom: 1.1 });
+      const needsViewport = viewportProjectRef.current !== graph.project.id;
+      if (needsViewport || focusId) {
+        viewportProjectRef.current = graph.project.id;
+        const restoredViewport = readViewport(graph.project.id);
+        viewportReadyRef.current = false;
+        requestAnimationFrame(() => requestAnimationFrame(async () => {
+          if (viewportTouchedRef.current && !focusId) { viewportReadyRef.current = true; return; } // 迟到数据不抢走用户已移动的视口。
+          const focus = next.find(node => node.id === (focusId || new URLSearchParams(location.search).get('node')));
+          if (focus) await flow.fitView({ nodes: [focus], padding: 0.24, duration: 0, maxZoom: 1.1 });
+          else if (restoredViewport) await flow.setViewport(restoredViewport);
+          else await flow.fitBounds(canvasBounds(next, nextEdges), { padding: 0.12, duration: 0, maxZoom: 1.1 });
+          viewportReadyRef.current = true;
         }));
       }
       }
+      return true;
     } catch (failure) {
       if (failure.status === 401) onExpired();
       else if (failure.status === 404) { setNodes([]); setEdges([]); graphRef.current = null; setPhase('notfound'); }
-      else { if (!graphRef.current) setPhase('error'); setNotice(failure.status === 503 ? 'FlowUs 暂时不可用，当前关系图可能不是最新，请重试刷新。' : '暂时无法加载关系图，请稍后重试。'); }
+      else { if (!graphRef.current) setPhase('error'); setNotice(failure.reconcile ? `编号协调未完成：${failure.message} 当前关系图仅供查看，编辑已停用。可点击刷新重试。` : failure.status === 503 ? 'FlowUs 暂时不可用，当前关系图可能不是最新，请重试刷新。' : '暂时无法加载关系图，请稍后重试。'); }
+      return false;
     } finally { loadingRef.current = false; setBusy(false); }
-  }, [endpoint, flow, changed, onExpired]);
+  }, [endpoint, flow, changed, onExpired, session.csrfToken]);
 
   useEffect(() => {
     refresh();
@@ -306,13 +347,50 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
     finally { exitingRef.current = false; setBusy(false); }
   }
 
-  const focus = useMemo(() => hovered ? lineageFocus(hovered, edges) : null, [hovered, edges]);
-  const displayNodes = useMemo(() => nodes.map(node => ({ ...node, data: { ...node.data, dimmed: Boolean(focus && !focus.nodes.has(node.id)) } })), [nodes, focus]);
+  /** 保存待处理布局后写回实验；输入操作及字段，输出确认后的刷新结果。 */
+  async function commitExperiment(type, payload) {
+    if (mutationRef.current) return;
+    mutationRef.current = true;
+    let submitted = false;
+    try {
+      clearTimeout(timerRef.current); await save();
+      if (dirtyRef.current || conflictRef.current || layoutWarningRef.current) throw new Error('当前布局尚未安全保存，请先重试保存或刷新后再编辑。');
+      const node = nodesRef.current.find(item => item.id === payload.nodeId);
+      let result;
+      submitted = true;
+      if (type === 'create') result = await request(`${endpoint}/experiments`, { method: 'POST', headers: { 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify({ title: payload.title, sourceIds: payload.sourceIds, requestId: payload.requestId }) });
+      else {
+        const patch = type === 'status' ? { status: payload.status } : { sourceIds: payload.sourceIds };
+        result = await request(`${endpoint}/experiments/${encodeURIComponent(payload.nodeId)}`, { method: 'PATCH', headers: { 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify({ ...patch, revision: node?.data.revision }) });
+      }
+      setEditor(null); // 已确认写入后立即结束表单；刷新失败不能诱发重复创建。
+      const refreshed = await refresh(true, type === 'create' ? result.nodeId || result.node?.id : null);
+      if (!refreshed) setNotice('实验已保存，但关系图刷新失败。请点击刷新确认，勿重复新增。');
+    } catch (failure) {
+      if (failure.status === 401) { onExpired(); return; }
+      if (failure.status === 409) throw new Error(`${failure.message} 请关闭此窗口并刷新后重试；本次输入未提交。`);
+      if (submitted && type === 'create' && (!failure.status || failure.status >= 500)) throw Object.assign(new Error('新增结果尚未确认。请保留此窗口并重试同一请求，避免重复新增。'), { retrySameRequest: failure.retrySameRequest !== false });
+      throw failure;
+    } finally { mutationRef.current = false; }
+  }
+
+  /** 离开画布前保存布局；输入跳转事件，输出允许跳转或保留当前页面。 */
+  function prepareLeave(event) {
+    if (!dirtyRef.current && !savingRef.current) return;
+    event.preventDefault();
+    void save().then(() => setNotice(dirtyRef.current ? '布局尚未保存，已取消跳转。请先解决保存问题。' : '布局已保存，请再次点击前往 FlowUs。'));
+  }
+
+  const focus = useMemo(() => hovered && !editor && !connectionPreview ? lineageFocus(hovered, edges) : null, [hovered, edges, editor, connectionPreview]);
+  const readOnly = busy || Boolean(conflictRef.current || layoutWarningRef.current);
+  const displayNodes = useMemo(() => nodes.map(node => ({ ...node, data: { ...node.data, dimmed: Boolean(focus && !focus.nodes.has(node.id)), onAction: openEditor, onConnectionPreview: previewConnection, readOnly } })), [nodes, focus, readOnly, openEditor, previewConnection]);
   const displayEdges = useMemo(() => edges.map((edge, lane) => ({ ...edge, data: { nodes, lane, dimmed: Boolean(focus && !focus.links.has(edge.id)) } })), [edges, focus, nodes]);
   return <main className="canvas-shell" style={{ '--project-color': cardColor }}>
-    <ReactFlow onNodeMouseEnter={(_, node) => setHovered(node.id)} onNodeMouseLeave={() => setHovered(null)} onPaneClick={() => setHovered(null)} nodes={displayNodes} edges={displayEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} colorMode={colorScheme} onNodesChange={changes => { const next = applyNodeChanges(changes, nodesRef.current); nodesRef.current = next; setNodes(next); }} nodesDraggable={false} nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null} minZoom={0.1} maxZoom={2.5} fitView fitViewOptions={{ padding: 0.24, maxZoom: 1.1 }} proOptions={{ hideAttribution: true }}>
+    <ReactFlow onNodeMouseEnter={(_, node) => setHovered(node.id)} onNodeMouseLeave={() => setHovered(null)} onPaneClick={() => setHovered(null)} nodes={displayNodes} edges={displayEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} colorMode={colorScheme} onNodesChange={changes => { const next = applyNodeChanges(changes, nodesRef.current); nodesRef.current = next; setNodes(next); }} onMoveStart={event => { if (event) { viewportTouchedRef.current = true; viewportReadyRef.current = true; } }} onMoveEnd={(_event, viewport) => { if (viewportReadyRef.current) writeViewport(graphRef.current?.project.id, viewport); }} nodesDraggable={false} nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null} minZoom={0.1} maxZoom={2.5} proOptions={{ hideAttribution: true }}>
+      {connectionPreview && <ViewportPortal><svg className="connection-preview"><path d={(() => { const source = nodes.find(item => item.id === connectionPreview.sourceId), point = flow.screenToFlowPosition(connectionPreview.point); return source ? `M ${source.position.x + WIDTH} ${source.position.y + HEIGHT / 2} C ${source.position.x + WIDTH + 54} ${source.position.y + HEIGHT / 2}, ${point.x - 54} ${point.y}, ${point.x} ${point.y}` : ''; })()}/></svg></ViewportPortal>}
       <Background gap={28} size={1} color="var(--grid)" bgColor="var(--canvas)"/>
     </ReactFlow>
+    {editor && <ExperimentEditor editor={editor} nodes={nodes} edges={edges} statusOptions={statusOptions} onClose={() => setEditor(null)} onCommit={commitExperiment} onPrepareLeave={prepareLeave} statusAppearance={statusAppearance}/>}
     {pickerOpen && <ColorPicker color={cardColor} onClose={closePicker} onChange={next => {
       if (exitingRef.current || loadingRef.current || next === colorRef.current || conflictRef.current || layoutWarningRef.current) return;
       colorRef.current = next; setCardColor(next); changed(nodesRef.current); // 立即预览，沿用三秒合并写回。
@@ -322,6 +400,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
       <Tool label="缩小" onClick={() => flow.zoomOut({ duration: 150 })}><ZoomOut size={18}/></Tool>
       <Tool label="适应画布" onClick={() => flow.fitBounds(canvasBounds(nodesRef.current, edges), { padding: 0.12, duration: 250, maxZoom: 1.1 })}><Scan size={18}/></Tool>
       <span className="divider"/>
+      <Tool label="新增实验" disabled={busy || phase !== 'ready' || conflictRef.current || layoutWarningRef.current} onClick={() => openEditor({ type: 'create' })}><Plus size={18}/></Tool>
       <Tool label="卡片颜色" aria-expanded={pickerOpen} disabled={phase !== 'ready' || busy || conflictRef.current || layoutWarningRef.current} onClick={() => setPickerOpen(open => !open)}><Palette size={17}/></Tool>
       <Tool label="自动排列并保存布局" disabled={busy || phase !== 'ready' || conflictRef.current || layoutWarningRef.current} onClick={relayout}><Network size={18}/></Tool>
       <Tool label={conflictRef.current ? '重新加载最新布局' : '刷新关系图'} disabled={busy} onClick={() => refresh(true)}><RefreshCw size={18} className={busy ? 'spin' : ''}/></Tool>
@@ -331,7 +410,7 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
     {phase === 'loading' && <div className="canvas-empty"><LoaderCircle className="spin" size={23}/><p>正在读取项目关系…</p></div>}
     {phase === 'notfound' && <div className="canvas-empty"><Network size={30}/><h2>未找到项目</h2><p>请检查项目地址，或确认项目仍可访问。</p></div>}
     {phase === 'error' && <div className="canvas-empty"><Network size={30}/><h2>关系图暂时无法加载</h2><button className="text-button" onClick={() => refresh(true)}>重新加载</button></div>}
-    {phase === 'ready' && !nodes.length && <div className="canvas-empty"><Network size={30}/><h2>这里还没有实验</h2><p>在 FlowUs 中添加实验后，关系会显示在这里。</p></div>}
+    {phase === 'ready' && !nodes.length && <div className="canvas-empty"><Network size={30}/><h2>这里还没有实验</h2><p>点击右上角“新增实验”创建第一个实验。</p></div>}
     {notice && <div className="notice" role="alert"><span>{notice}</span>{saveState === '保存失败' && <button className="retry" title="重试保存布局" aria-label="重试保存布局" onClick={save}><RotateCcw size={16}/></button>}</div>}
     {project && <div className="canvas-caption"><span className="project-name" title={project.title}>{project.title}</span><span className="caption-detail">{nodes.length} 个实验 · {edges.length} 条关系</span>{saveState && <span className="save-state" role="status">{saveState}</span>}</div>}
   </main>;
