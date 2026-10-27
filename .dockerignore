@@ -7,3 +7,8 @@ oauth-state
 bin
 test
 ops
+
+mcp/state
+mcp/settings.env
+.venv
+__pycache__

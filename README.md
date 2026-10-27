@@ -132,6 +132,17 @@ QuickStart 使用显式 token 文件，**不会自动刷新该 token**。仓库�
 
 官方 API 与授权入口：[FlowUs 开发者文档](https://flowus.cn/developer-api/v2/zh)。
 
+## Helix 专用 MCP 与 Skill
+
+除网页画布外，可连接独立的远程 MCP，让 AI 管理同一份 FlowUs 项目、实验、正文、附件与画布。当前 Node 服务提供 **18 个工具**；Python/FastMCP 仅承担传输和独立 OAuth 身份验证，工具清单、输入校验和项目范围检查由 Node 维护，**不依赖 Skill 来限制权限**。
+
+- 部署：[MCP 配置、Compose 与 OAuth 指南](mcp/README.md)。该入口需要独立 HTTPS 域名、专用 OAuth 状态目录及与 Node 共享的机器密钥；现有画布登录保持独立。
+- 客户端添加自己的 `https://helix-mcp.example.com/mcp` 并完成 OAuth；前端授权用于验证所有者和工作区，业务范围由 Node 配置与服务器后端 FlowUs 授权共同限制。
+- 可将仓库中的 [Helix Skill](skills/helix/SKILL.md) 按客户端支持方式安装，并一并保留 `references/`。使用时先调用 `helix_help` 获取当前契约，不用通用工具绕过编号、模板和归属校验。
+- [工具使用、附件上传及冲突处理](docs/mcp-usage.md)；[FlowUs API 契约与已知限制](docs/mcp-api-contract.md)。
+
+FlowUs 仍是唯一业务数据源；新增持久状态仅用于 OAuth 注册、签名和认证。软删除需先检查影响，删除成功后清理来源并重编，不自动跨接；**当前页面级授权实测删除后恢复为 403，不能承诺 API 撤销删除**，也不会自动扩大底层权限。正文追加与附件挂载的去重仅在当前进程有效，结果不明时先读回核对，不能盲目重试。
+
 ## 实现思路
 
 ```mermaid

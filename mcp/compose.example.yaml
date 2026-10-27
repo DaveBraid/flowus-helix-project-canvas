@@ -1,0 +1,39 @@
+# 在仓库根目录与 compose.yaml 合并使用；所有路径相对根目录。
+services:
+  helix:
+    environment:
+      HELIX_INTERNAL_TOKEN_FILE: /run/secrets/mcp-internal-token
+  mcp:
+    image: flowus-helix-mcp:local
+    build: ./mcp
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: [/tmp:rw,noexec,nosuid,size=16m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 128
+    ports: ["127.0.0.1:18771:18771"]
+    environment:
+      HELIX_MCP_PUBLIC_BASE_URL: ${HELIX_MCP_PUBLIC_BASE_URL:?Set your HTTPS MCP origin}
+      HELIX_MCP_BIND_HOST: "0.0.0.0"
+      HELIX_MCP_STATE_DIR: /state
+      HELIX_MCP_OWNER_ID: ${HELIX_MCP_OWNER_ID:?Set the trusted owner ID}
+      HELIX_MCP_WORKSPACE_ID: ${HELIX_MCP_WORKSPACE_ID:?Set the trusted workspace ID}
+      HELIX_MCP_ALLOWED_REDIRECT_URIS: ${HELIX_MCP_ALLOWED_REDIRECT_URIS:?Set the client redirect allowlist JSON}
+      HELIX_INTERNAL_URL: http://helix:3000
+      HELIX_INTERNAL_TOKEN_FILE: /run/secrets/mcp-internal-token
+    volumes:
+      - ./mcp/state:/state:rw
+      - ./secrets/mcp-internal-token:/run/secrets/mcp-internal-token:ro
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18771/healthz', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 70s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}

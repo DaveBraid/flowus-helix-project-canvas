@@ -7,6 +7,7 @@ import { FlowUs, Projects, ServiceError, secret, validSlug } from './flowus.mjs'
 import { startUrlSync } from './sync.mjs';
 import { CliOAuth } from './oauth.mjs';
 import { reconcileNumbers } from './numbering.mjs';
+import { HelixActions, helixTools, internalAuthorized } from './helix-actions.mjs';
 
 /** 读取有大小限制的 JSON 请求，避免无界内存分配。 */
 async function jsonBody(req) {
@@ -17,7 +18,7 @@ async function jsonBody(req) {
 }
 
 /** 创建 HTTP 服务；依赖可注入以验证鉴权、项目边界及失败行为。 */
-export function createApp({ auth, projects, origin, dist = resolve(dirname(fileURLToPath(import.meta.url)), '../dist') }) {
+export function createApp({ auth, projects, origin, internalToken = '', actions = new HelixActions(projects), dist = resolve(dirname(fileURLToPath(import.meta.url)), '../dist') }) {
   const attempts = new Map(); let activeLogin = false;
   const send = (res, status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
   return createServer(async (req, res) => {
@@ -27,6 +28,16 @@ export function createApp({ auth, projects, origin, dist = resolve(dirname(fileU
     try {
       const url = new URL(req.url, origin); const path = url.pathname;
       if (path === '/healthz' && req.method === 'GET') return send(res, 200, { ok: true });
+      if (path.startsWith('/internal/')) {
+        if (!internalAuthorized(req.headers.authorization, internalToken)) throw new ServiceError(401, '需要独立机器授权');
+        if (path === '/internal/mcp/tools' && req.method === 'GET') return send(res, 200, { tools: helixTools });
+        if (path === '/internal/mcp/call' && req.method === 'POST') {
+          const body = await jsonBody(req);
+          if (Object.keys(body).some(k => !['name', 'arguments'].includes(k))) throw new ServiceError(400, '机器调用格式无效');
+          return send(res, 200, await actions.call(body.name, body.arguments));
+        }
+        throw new ServiceError(404, '接口不存在');
+      }
       const session = auth.fromRequest(req);
       if (path === '/api/session' && req.method === 'GET') return send(res, 200, session ? { authenticated: true, csrfToken: session.csrfToken, expiresAt: session.expiresAt } : { authenticated: false });
       if (path.startsWith('/api/') && !['GET', 'HEAD'].includes(req.method)) {
@@ -116,7 +127,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!tokenProvider && !token) throw new Error('Independent FlowUs authorization is required');
   const auth = new Auth(secret('SESSION_SECRET'), secret('PASSWORD_HASH'), { secure: !origin.startsWith('http://localhost') });
   const projects = new Projects(new FlowUs({ token, tokenProvider }), { database: process.env.FLOWUS_PROJECTS_DATABASE_ID, publicOrigin: origin, allowed: (process.env.PROJECT_IDS || '').split(',').filter(Boolean) });
-  const server = createApp({ auth, projects, origin });
+  const server = createApp({ auth, projects, origin, internalToken: secret('HELIX_INTERNAL_TOKEN') });
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
   const stopSync = startUrlSync(projects);

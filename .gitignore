@@ -11,3 +11,10 @@ bin/
 
 .incoming/
 .releases/
+
+# MCP 的 OAuth 状态、安装环境和私有配置不进入仓库。
+mcp/state/
+mcp/settings.env
+.venv/
+__pycache__/
+*.pyc

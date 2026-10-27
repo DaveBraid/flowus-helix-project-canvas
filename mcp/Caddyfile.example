@@ -1,0 +1,9 @@
+# BEGIN HELIX MCP
+helix-mcp.example.com {
+    @internal path /healthz /internal/*
+    respond @internal 404
+    reverse_proxy 127.0.0.1:18771 {
+        header_up X-Real-IP {remote_host}
+    }
+}
+# END HELIX MCP
