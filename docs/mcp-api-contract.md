@@ -62,7 +62,7 @@ API 基址为 `https://api.flowus.cn`，认证为 Bearer token；需要空间计
 
 根代理现场回读测试附件：`file` 包含 `caption:[]`、`type:"file"` 与 `file:{oss_name:"oss/…/example-upload.txt",size:67}`，没有 `content_type`。这是允许的响应投影，不能因 MIME 缺省而认定追加失败。缺省时返回 `mimeSource:"upload-request"`，只说明 MIME 取自原上传请求；返回且匹配时为 `mimeSource:"flowus-block-readback"`。已经追加的附件保留，不为这次兼容修正重发追加。
 
-验证限度：`uploadStatus` 是客户端实际 PUT 响应的报告，服务端不能凭这个整数独立证明远端文件真实字节；FlowUs 块回读只证明内部引用元数据与申请交易一致。接口不会声称已独立验证对象字节或哈希。调用方不得在未完成 PUT 或 PUT 失败时伪报成功状态。上传和去重交易只在当前进程内有效，重启或过期后不承诺续接。2026-10-27 已完成远端“PUT→attach→块回读”验收；未独立验证存储对象字节或哈希。
+验证限度：`uploadStatus` 是客户端实际 PUT 响应的报告，服务端不能凭这个整数独立证明远端文件真实字节；FlowUs 块回读只证明内部引用元数据与申请交易一致。接口不会声称已独立验证对象字节或哈希。调用方不得在未完成 PUT 或 PUT 失败时伪报成功状态。上传和去重交易只在当前进程内有效，重启或过期后不承诺续接。2026-10-27 已完成远端“PUT→attach→GET block”验收；MIME 缺省时按 `mimeSource:"upload-request"` 标记。未独立验证存储对象字节或哈希。
 
 ## 复制与重设父级
 
@@ -74,8 +74,8 @@ CLI 0.3.13 `flowus page duplicate <page_id> [--parent-id <parent_id>] [--title <
 
 来源：[移动页面](https://flowus.cn/developer-api/v2/zh/write/move-page)、CLI `flowus help page duplicate`、`flowus api --docs/--spec '/v2/pages/{page_id}/move' -X PATCH`。
 
-## 待真实验收
+## 验收状态与剩余边界
 
-- 首次页面与实验软删除已有现场报告；页面授权模式的重复删除与恢复为明确未通过项。其余块/数据库删除、原位置恢复、子树及内部文件保持仍待独立验收。
+- 2026-10-27，页面、实验、专用普通块与空表的首次软删除均已实测成功；普通块与空表已从有效子块列表移除。当前页面范围授权下恢复仍返回 `403`，不承诺可撤销删除；非空子树、内部文件保持和原位置恢复仍待独立验收。
 - 核对 CLI 原生复制返回结构、父级、后代、关系属性和内部文件；不要假定复制会自动重写跨页面 relation。
 - 未文档化的并发条件、删除后读取结果和视图恢复行为，保持未知；不要依赖探索发现的私有字段。
