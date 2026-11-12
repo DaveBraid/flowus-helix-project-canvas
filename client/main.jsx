@@ -63,10 +63,12 @@ const ExperimentNode = memo(function ExperimentNode({ id, data, selected }) {
   const drag = useRef(null);
   const suppressClick = useRef(false);
   const { Icon, tone } = statusAppearance(data.status);
+  const [branchOrStage, stage] = String(data.number ?? '').split('·');
+  const stageLabel = stage ? `分支 ${branchOrStage}，阶段 ${stage}` : `阶段 ${branchOrStage || '—'}`;
   const title = data.number ? data.title.replace(new RegExp(`^${data.number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[.]?\\s+`), '') : data.title;
   return <article className={`experiment ${selected ? 'selected' : ''} ${data.dimmed ? 'lineage-dimmed' : ''}`}>
     <Handle type="target" position={Position.Left} isConnectable={false}/>
-    <div className="node-meta"><span className="number">阶段 {data.number || '—'}</span><Hint label="修改实验状态"><button type="button" className={`status nodrag nopan is-${tone}`} disabled={data.readOnly} aria-label={`修改 ${data.title} 的状态`} onClick={event => { event.stopPropagation(); data.onAction({ type: 'status', nodeId: id, anchor: event.currentTarget.getBoundingClientRect() }); }}><Icon size={12} aria-hidden="true"/><span>{data.status || '未设置状态'}</span></button></Hint></div>
+    <div className="node-meta"><span className="number" title={stageLabel}>{stageLabel}</span><Hint label="修改实验状态"><button type="button" className={`status nodrag nopan is-${tone}`} disabled={data.readOnly} aria-label={`修改 ${data.title} 的状态`} onClick={event => { event.stopPropagation(); data.onAction({ type: 'status', nodeId: id, anchor: event.currentTarget.getBoundingClientRect() }); }}><Icon size={12} aria-hidden="true"/><span>{data.status || '未设置状态'}</span></button></Hint></div>
     <a className="node-title nodrag nopan" href={data.url} target="_top" title="在 FlowUs 中打开">{title || '未命名实验'}</a>
     <div className="node-project">{data.projectTitle}</div>
     <div className="node-relations">{data.incoming ? `来源 ${data.incoming}` : '起始阶段'}{data.outgoing > 0 ? `　后续 ${data.outgoing}` : ''}</div>

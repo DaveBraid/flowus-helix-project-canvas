@@ -102,6 +102,7 @@ export class Projects {
     this.slugField = options.slugField || '项目 URL 名'; this.layoutField = options.layoutField || 'Canvas 状态';
     this.cache = new Map(); this.pending = new Map(); this.ttl = options.ttl ?? 30000;
     this.allowed = options.allowed || []; this.publicOrigin = options.publicOrigin || '';
+    this.legacyNumberingIds = new Set(options.legacyNumberingIds ?? (process.env.LEGACY_NUMBERING_PROJECT_IDS || '').split(',').map(id => id.trim()).filter(Boolean));
     this.mutations = new Map(); this.cacheVersions = new Map();
     this.experiments = new Experiments(this, options.templateId ?? process.env.FLOWUS_EXPERIMENT_TEMPLATE_ID ?? '');
   }
@@ -162,8 +163,9 @@ export class Projects {
       if (relation.relation.some(item => !item || typeof item.id !== 'string')) throw new ServiceError(503, '实验关联响应不完整');
     }
     const { nodes, edges, missingRelations } = graphRecords(records);
+    const legacyNumbering = this.legacyNumberingIds.has(page.id);
     // 创建只需真实归属、关系和表结构，不读取无关的画布布局属性。
-    if (forCreate) return { project: { id: page.id }, databaseId: db.id, databaseSchema: db, nodes, edges, missingRelations };
+    if (forCreate) return { project: { id: page.id }, databaseId: db.id, databaseSchema: db, nodes, edges, missingRelations, legacyNumbering };
     let layoutProperty = property(page, this.layoutField);
     if (!layoutProperty || layoutProperty.type !== 'rich_text') throw new ServiceError(409, '项目缺少文本类型的 Canvas 状态属性');
     if (layoutProperty.rich_text?.length || layoutProperty.has_more) {
@@ -186,7 +188,7 @@ export class Projects {
         } else layoutWarning = '画布所属项目或实验表不匹配，未覆盖原数据';
       } catch { layoutWarning = '画布状态格式有误，未覆盖原数据'; }
     }
-    return { project: { id: page.id, title: plain(Object.values(page.properties).find(p => p.type === 'title')?.title), slug }, nodes, edges, statusOptions: (db.properties?.['状态']?.select?.options || []).map(option => option.name), layout, revision: etag, databaseId: db.id, layoutWarning, missingRelations };
+    return { project: { id: page.id, title: plain(Object.values(page.properties).find(p => p.type === 'title')?.title), slug }, nodes, edges, statusOptions: (db.properties?.['状态']?.select?.options || []).map(option => option.name), layout, revision: etag, databaseId: db.id, layoutWarning, missingRelations, legacyNumbering };
   }
   /** 原位更新同一画布属性；输入坐标和旧版本，输出确认后的持久状态。 */
   async save(slug, { revision, positions, cardColor }) {

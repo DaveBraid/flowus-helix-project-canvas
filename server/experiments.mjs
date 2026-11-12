@@ -7,6 +7,8 @@ const textFields = ['rich_text', 'text_color', 'background_color', 'text_align']
 const blockFields = Object.fromEntries(['paragraph', 'quote', 'toggle', 'bulleted_list_item', 'numbered_list_item'].map(type => [type, textFields]));
 for (const type of ['heading_1', 'heading_2', 'heading_3']) blockFields[type] = [...textFields, 'is_toggleable'];
 Object.assign(blockFields, { to_do: [...textFields, 'checked'], code: ['rich_text', 'language', 'display_mode', 'text_align'], equation: ['expression'], divider: [], callout: [...textFields, 'icon'], table: ['table_width', 'has_column_header', 'has_row_header', 'width_mode'], table_row: ['cells'], column_list: [], column: ['width_ratio'] });
+const mediaTypes = new Set(['file', 'image', 'audio', 'video']);
+for (const type of mediaTypes) blockFields[type] = ['caption', 'caption_align', 'text_align'];
 
 /** 构造完整原生富文本；不把 API 输出专用的颜色别名带回写入。 */
 export function richText(content, url = null) {
@@ -30,7 +32,24 @@ function copyRichText(items) {
   });
 }
 
-/** 读取并复制支持的原生块；遇到媒体或子页先停止，避免静默丢失正文。 */
+/** 复制可写入的附件引用，内部文件沿用对象键，不保存会过期的下载地址。 */
+function copyMediaSource(payload) {
+  if (payload.type === 'file') {
+    const { oss_name, size, content_type } = payload.file ?? {};
+    if (typeof oss_name === 'string' && oss_name.trim() && Number.isSafeInteger(size) && size >= 0) {
+      const file = { oss_name, size };
+      if (typeof content_type === 'string' && content_type) file.content_type = content_type;
+      return { type: 'file', file };
+    }
+  } else if (payload.type === 'external' && typeof payload.external?.url === 'string' && payload.external.url.trim()) {
+    const source = { type: 'external', external: { url: payload.external.url } };
+    if (payload.display !== undefined) source.display = payload.display;
+    return source;
+  }
+  throw new ServiceError(409, '附件缺少可继承的文件引用，未创建实验');
+}
+
+/** 读取并复制支持的原生块；未知块在创建前报错，避免静默丢失正文。 */
 async function copyBlocks(api, blocks, budget = { count: 0 }, depth = 0) {
   if (depth > 24 || blocks.length > 100) throw new ServiceError(413, '模板或引用正文层级过深或单层超过 100 块，未创建实验');
   const result = [];
@@ -40,7 +59,7 @@ async function copyBlocks(api, blocks, budget = { count: 0 }, depth = 0) {
     if (!fields) throw new ServiceError(409, `模板或引用正文包含暂不支持的 ${block.type} 块，未创建实验`);
     const payload = block[block.type];
     if (!payload || typeof payload !== 'object') throw new ServiceError(409, '正文块结构异常，未创建实验');
-    const value = {};
+    const value = mediaTypes.has(block.type) ? copyMediaSource(payload) : {};
     for (const key of fields) if (payload[key] !== undefined) {
       if (key === 'rich_text' || key === 'caption') value[key] = copyRichText(payload[key]);
       else if (key === 'cells') value.cells = payload.cells.map(copyRichText);
@@ -84,6 +103,7 @@ function validateSources(graph, ids, target) {
     visiting.add(id); for (const child of next.get(id) || []) visit(child); visiting.delete(id); visited.add(id);
   };
   for (const id of next.keys()) visit(id);
+  return edges;
 }
 function titleField(db) {
   const fields = Object.entries(db.properties || {}).filter(([, value]) => value.type === 'title');
@@ -140,7 +160,11 @@ export class Experiments {
       if (entry.result) { const { graphPatch, ...result } = entry.result; return result; } // 重放不能返回旧图快照。
       const api = this.projects.api;
       if (!entry.body) {
-        const graph = await this.projects.load(slug, { forCreate: true }); validateSources(graph, ids);
+        const graph = await this.projects.load(slug, { forCreate: true });
+        const pendingId = 'pending:' + input.requestId;
+        const edges = validateSources(graph, ids, pendingId);
+        // 先校验新关系和预计编号，再读取模板及来源正文。
+        const number = stageNumbers({ ...graph, nodes: [...graph.nodes, { id: pendingId, createdTime: new Date().toISOString() }], edges }).get(pendingId);
         const db = graph.databaseSchema;
         const budget = { count: 0 };
         const quotes = [];
@@ -160,9 +184,6 @@ export class Experiments {
         const children = template.children;
         children.splice(template.start + 1, 0, ...quotes);
         if (children.length > 100) throw new ServiceError(413, '模板与来源引用合计超过 100 个顶层块，未创建实验');
-        // 先写预计编号；普通追加无需再 PATCH 标题及重读，分支变更仍由协调器校正。
-        const pendingId = `pending:${input.requestId}`;
-        const number = stageNumbers({ nodes: [...graph.nodes, { id: pendingId, createdTime: new Date().toISOString() }], edges: [...graph.edges, ...ids.map(source => ({ source, target: pendingId }))] }).get(pendingId);
         const properties = { [titleField(db)]: { type: 'title', title: [richText(`${number}. ${title}`)] }, 来源实验: { type: 'relation', relation: ids.map(id => ({ id })) } };
         if (db.properties?.状态?.select?.options?.some(option => option.name === '计划中')) properties.状态 = { type: 'select', select: { name: '计划中' } };
         entry.graph = graph;
@@ -188,7 +209,7 @@ export class Experiments {
           && Object.values(props || {}).some(p => p.type === 'title') && Array.isArray(props?.来源实验?.relation) && !props.来源实验.has_more) {
           const node = graphRecords([data]).nodes[0];
           const expectedSources = [...node.sourceIds].sort();
-          const patch = { projectId: entry.projectId, databaseId: entry.databaseId, nodes: [...entry.graph.nodes, node],
+          const patch = { projectId: entry.projectId, databaseId: entry.databaseId, legacyNumbering: entry.graph.legacyNumbering, nodes: [...entry.graph.nodes, node],
             edges: [...entry.graph.edges, ...ids.map(source => ({ id: `${source}:${data.id}`, source, target: data.id }))], missingRelations: 0 };
           const numbers = stageNumbers(patch);
           if (JSON.stringify(expectedSources) === JSON.stringify(ids) && patch.nodes.every(n => n.title.startsWith(`${numbers.get(n.id)}. `) && n.number === numbers.get(n.id))) entry.result.graphPatch = patch;
@@ -220,7 +241,9 @@ export class Experiments {
       }
       if (Object.hasOwn(input, 'sourceIds')) {
         if (node.sourceIds.some(source => !graph.nodes.some(n => n.id === source))) throw new ServiceError(409, '现有来源含表外引用，请在 FlowUs 中处理，未清除原关系');
-        const ids = sourceValues(input.sourceIds); validateSources(graph, ids, id);
+        const ids = sourceValues(input.sourceIds);
+        const edges = validateSources(graph, ids, id);
+        if (!graph.legacyNumbering) stageNumbers({ ...graph, edges });
         for (const sourceId of ids) {
           const { data: source } = await api.request('GET', `/pages/${sourceId}`);
           if (!alive(source) || source.parent?.database_id !== graph.databaseId) throw new ServiceError(409, '来源已移出当前实验表，未保存');

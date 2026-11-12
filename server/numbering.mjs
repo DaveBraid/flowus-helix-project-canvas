@@ -1,10 +1,10 @@
 import { ServiceError, plain, alive } from './flowus.mjs';
 
-const prefix = /^\d+(?:\.\d+)*(?:[a-z])?\.?\s+/i;
+const prefix = /^\d+(?:\.\d+)*(?:[ \t]*·[ \t]*\d+|[a-z])?\.?\s+/i;
 
-/** 沿用 Ob Helix 的 DAG 编号规则；输入完整图，输出稳定的连续大号和分支小号。 */
-export function stageNumbers({ nodes, edges }) {
-  // 创建时间承担 Ob 的固定物理序列；不能以正在改写的编号作为重试顺序。
+/** 按来源关系计算分支路径与阶段序号。显式保留旧规则的项目继续使用 DAG 编号。 */
+export function stageNumbers({ nodes, edges, legacyNumbering = false }) {
+  // 用创建时间和页面 ID 固定同级次序，重编后的标题不参与排序。
   const ordered = [...nodes].sort((a, b) => (a.createdTime || '').localeCompare(b.createdTime || '') || a.id.localeCompare(b.id));
   const rank = new Map(ordered.map((n, i) => [n.id, i]));
   const incoming = new Map(ordered.map(n => [n.id, []]));
@@ -17,7 +17,8 @@ export function stageNumbers({ nodes, edges }) {
   }
   const compare = (a, b) => rank.get(a) - rank.get(b);
   const degree = new Map([...incoming].map(([id, sources]) => [id, sources.length]));
-  const queue = ordered.filter(n => !degree.get(n.id)).map(n => n.id), topo = [];
+  const roots = ordered.filter(n => !degree.get(n.id)).map(n => n.id);
+  const queue = [...roots], topo = [];
   while (queue.length) {
     const id = queue.shift(); topo.push(id);
     for (const target of outgoing.get(id)) {
@@ -26,6 +27,36 @@ export function stageNumbers({ nodes, edges }) {
     }
   }
   if (topo.length !== nodes.length) throw new ServiceError(409, '实验关系存在循环，未自动重编编号');
+  if (legacyNumbering) return legacyStageNumbers(topo, incoming, outgoing, compare);
+  if (roots.length > 1 || [...incoming.values()].some(sources => sources.length > 1)) {
+    throw new ServiceError(409, '多起点或合流的分支编号规则尚未确认');
+  }
+
+  const numbers = new Map();
+  const paths = new Map();
+  for (const targets of outgoing.values()) if (targets.length > 1) targets.sort(compare);
+  for (const id of topo) {
+    const [source] = incoming.get(id);
+    let branch = '', stage = 1;
+    if (source) {
+      const parent = paths.get(source);
+      const siblings = outgoing.get(source);
+      branch = parent.branch;
+      if (siblings.length > 1) {
+        const index = siblings.indexOf(id) + 1;
+        branch = branch ? branch + '.' + index : String(index);
+      } else {
+        stage = parent.stage + 1;
+      }
+    }
+    paths.set(id, { branch, stage });
+    numbers.set(id, branch ? branch + '·' + stage : String(stage));
+  }
+  return numbers;
+}
+
+/** 沿用显式保留项目的原 DAG 编号，包括多起点、合流和旧分支号。 */
+function legacyStageNumbers(topo, incoming, outgoing, compare) {
   const branches = new Map();
   for (const [id, targets] of outgoing) {
     if (targets.length > 1) branches.set(id, targets.filter(t => incoming.get(t).length === 1).sort(compare));

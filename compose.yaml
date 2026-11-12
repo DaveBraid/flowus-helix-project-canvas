@@ -18,6 +18,7 @@ services:
       FLOWUS_PROJECTS_DATABASE_ID: ${FLOWUS_PROJECTS_DATABASE_ID:?Set the Projects database ID}
       FLOWUS_EXPERIMENT_TEMPLATE_ID: ${FLOWUS_EXPERIMENT_TEMPLATE_ID:-} # 新增实验的普通模板页面。
       PROJECT_IDS: ${PROJECT_IDS:-}
+      LEGACY_NUMBERING_PROJECT_IDS: ${LEGACY_NUMBERING_PROJECT_IDS:-} # 逗号分隔的项目页面 ID。
       FLOWUS_TOKEN_FILE: /run/secrets/flowus-token
       PASSWORD_HASH_FILE: /run/secrets/password-hash
       SESSION_SECRET_FILE: /run/secrets/session-secret

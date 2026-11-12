@@ -10,7 +10,7 @@ const heading = (text, n = 1) => ({ id: `heading-${text}`, type: `heading_${n}`,
 const paragraph = text => ({ id: text, type: 'paragraph', paragraph: { rich_text: [richText(text)], color: 'default' } });
 function fixture() {
   const calls = []; let postFailures = 0; let currentProject = projectId;
-  const graph = { project: { id: projectId }, databaseId: dbId, nodes: [a, b, c].map((id, i) => ({ id, title: `实验 ${i}`, number: `${i + 1}`, revision, sourceIds: [] })), edges: [{ source: a, target: b }] };
+  const graph = { project: { id: projectId }, databaseId: dbId, legacyNumbering: true, nodes: [a, b, c].map((id, i) => ({ id, title: `实验 ${i}`, number: `${i + 1}`, revision, sourceIds: [] })), edges: [{ source: a, target: b }] };
   const db = { id: dbId, properties: { 实验内容: { type: 'title' }, 来源实验: { type: 'relation', relation: { database_id: dbId } }, 状态: { type: 'select', select: { options: [{ name: '计划中' }, { name: '进行中' }] } }, 编号: { type: 'formula' } } };
   const template = [heading('本阶段问题聚焦'), heading('计划行动'), { type: 'to_do', to_do: { rich_text: [], checked: false } }, heading('下一阶段聚焦问题')];
   const bodies = new Map([a, b].map(id => [id, [heading('记录'), paragraph('不继承的旧结果'), heading('下一阶段聚焦问题'), paragraph(`聚焦-${id}`), heading('附录'), paragraph('不继承的附录')]]));
@@ -59,12 +59,38 @@ test('创建一次提交模板和全部来源独立quote，只继承指定小节
   assert.equal(Object.hasOwn(body.children[0].heading_1, 'color'), false);
   assert.match(posts[0].idempotencyKey, /^[0-9a-f]{64}$/);
 });
+test('新建实验继承来源附件和模板媒体，内部文件仅写入稳定引用', async () => {
+  const f = fixture();
+  const file = { oss_name: 'oss/test/focus.png', size: 94853 };
+  const caption = [richText('聚焦问题截图')];
+  f.bodies.get(a).splice(4, 0, { type: 'file', file: { type: 'file', caption,
+    file: { ...file, url: 'https://example.com/temporary', expiry_time: time } } });
+  const image = { type: 'external', external: { url: 'https://example.com/template.png' }, caption_align: 'center' };
+  f.template.push({ type: 'image', image });
+
+  await f.projects.createExperiment('test', input);
+  const body = f.calls.find(call => call.method === 'POST').body;
+  assert.deepEqual(body.children[1].children[1].file, { type: 'file', file, caption });
+  assert.deepEqual(body.children.at(-1).image, image);
+});
+
 test('同一请求并发和成功重试不重复创建，改变内容409', async () => {
   const { projects, calls } = fixture();
   const values = await Promise.all([projects.createExperiment('test', input), projects.createExperiment('test', input)]);
   assert.deepEqual(values[0], values[1]);
   await projects.createExperiment('test', input); assert.equal(calls.filter(c => c.method === 'POST').length, 1);
   await assert.rejects(projects.createExperiment('test', { ...input, title: '不同内容' }), { status: 409 });
+});
+test('分支编号用于正常新建，未约定编号的来源关系在写入前拒绝', async () => {
+  const f = fixture();
+  f.graph.legacyNumbering = false;
+  f.graph.edges.push({ source: a, target: c });
+  await assert.rejects(f.projects.createExperiment('test', input), /多起点或合流/);
+  await assert.rejects(f.projects.updateExperiment('test', c, { sourceIds: [a, b], revision }), /多起点或合流/);
+  assert.ok(f.calls.every(call => !['POST', 'PATCH'].includes(call.method)));
+  await f.projects.createExperiment('test', { ...input, title: '后续实验', sourceIds: [b] });
+  const title = f.calls.find(call => call.method === 'POST').body.properties.实验内容.title;
+  assert.equal(title[0].plain_text, '1·2. 后续实验');
 });
 test('未知创建结果保留同一官方key及payload；简写复用后禁止重放', async () => {
   const { projects, calls, failPost, moveProject } = fixture(); failPost();
@@ -80,10 +106,11 @@ test('未确认请求重试检查实验表及来源归属', async () => {
   await assert.rejects(f.projects.createExperiment('test', input), { status: 409 });
   assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
 });
-test('来源跨表、缺失小节、未知块及失效模板均在创建前拒绝', async () => {
+test('来源跨表、缺失小节、无稳定引用的附件、未知块及失效模板均在创建前拒绝', async () => {
   let f = fixture(); await assert.rejects(f.projects.createExperiment('test', { ...input, sourceIds: [foreignId] }), { status: 400 }); assert.equal(f.calls.some(c => c.method === 'POST'), false);
   f = fixture(); f.bodies.set(a, [paragraph('缺少小节')]); await assert.rejects(f.projects.createExperiment('test', input), { status: 409 }); assert.equal(f.calls.some(c => c.method === 'POST'), false);
-  f = fixture(); f.template.push({ type: 'image', image: {} }); await assert.rejects(f.projects.createExperiment('test', input), { status: 409 }); assert.equal(f.calls.some(c => c.method === 'POST'), false);
+  f = fixture(); f.template.push({ type: 'file', file: { type: 'file', file: { url: 'https://example.com/temporary' } } }); await assert.rejects(f.projects.createExperiment('test', input), { status: 409 }); assert.equal(f.calls.some(c => c.method === 'POST'), false);
+  f = fixture(); f.template.push({ type: 'child_page', child_page: {} }); await assert.rejects(f.projects.createExperiment('test', input), { status: 409 }); assert.equal(f.calls.some(c => c.method === 'POST'), false);
   f = fixture(); f.pages.get(templateId).archived = true; await assert.rejects(f.projects.createExperiment('test', input), { status: 409 });
   f = fixture(); f.pages.get(a).parent.database_id = foreignId; await assert.rejects(f.projects.createExperiment('test', input), { status: 409 });
 });

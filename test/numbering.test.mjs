@@ -4,20 +4,42 @@ import { stageNumbers, numberedTitle, reconcileNumbers } from '../server/numberi
 const graph = (ids, pairs) => ({ nodes: ids.map(([id, number]) => ({id,number,createdTime:number.padStart(12,'0')})), edges:pairs.map(([source,target])=>({source,target})) });
 test('Ob 分支共享大号，合并继续推进；删除一个分支后紧凑重编',()=>{
  const g=graph([['a','1'],['b','2'],['c','3'],['d','4']],[['a','b'],['a','c'],['b','d'],['c','d']]);
+ g.legacyNumbering=true;
  assert.deepEqual([...stageNumbers(g)], [['a','1'],['b','2.1'],['c','2.2'],['d','3']]);
  g.nodes=g.nodes.filter(n=>n.id!=='c');g.edges=g.edges.filter(e=>e.source!=='c'&&e.target!=='c');
  assert.deepEqual([...stageNumbers(g)], [['a','1'],['b','2'],['d','3']]);
 });
 test('固定创建顺序重编，再次计算不变化，循环拒绝',()=>{
  const g=graph([['a','1'],['b','2.2'],['c','2.1'],['d','6']],[['a','b'],['a','c'],['b','d'],['c','d']]);
+ g.legacyNumbering=true;
  const n=stageNumbers(g);assert.equal(n.get('c'),'2.1');assert.equal(n.get('b'),'2.2');
  g.nodes.forEach(x=>x.number=n.get(x.id));assert.deepEqual(stageNumbers(g),n);
  g.edges.push({source:'d',target:'a'});assert.throws(()=>stageNumbers(g),/循环/);
+});
+test('主干单独编号，分支推进保留路径，子分岔新增层级并重置阶段',()=>{
+ const g=graph(
+  [['a','1'],['b','2'],['c','3'],['d','4'],['e','5'],['f','6'],['g','7'],['h','8'],['i','9'],['j','10']],
+  [['a','b'],['b','d'],['b','c'],['c','e'],['d','g'],['d','f'],['g','h'],['h','j'],['h','i']]
+ );
+ const numbers=stageNumbers(g);
+ assert.deepEqual(Object.fromEntries(numbers), {
+  a:'1', b:'2', c:'1·1', d:'2·1', e:'1·2', f:'2.1·1', g:'2.2·1', h:'2.2·2', i:'2.2.1·1', j:'2.2.2·1'
+ });
+ g.nodes.reverse().forEach(node=>{node.number=numbers.get(node.id)});
+ assert.deepEqual(stageNumbers(g),numbers);
+});
+test('未确认编号规则的多起点和合流停止重编',()=>{
+ assert.throws(()=>stageNumbers(graph([['a','1'],['b','2']],[])),/多起点或合流/);
+ const merge=graph([['a','1'],['b','2'],['c','3'],['d','4']],[['a','b'],['a','c'],['b','d'],['c','d']]);
+ assert.throws(()=>stageNumbers(merge),/多起点或合流/);
 });
 test('标题前缀分片、1a和无编号标题；正文格式保留',()=>{
  const title=[{type:'text',text:{content:'1'},plain_text:'1'},{type:'text',text:{content:'a. 实验'},plain_text:'a. 实验',annotations:{bold:true}}];
  const result=numberedTitle(title,'2.1');assert.equal(result.map(x=>x.text.content).join(''),'2.1. 实验');assert.equal(result[1].annotations.bold,true);assert.equal(title[1].text.content,'a. 实验');
  assert.equal(numberedTitle([{text:{content:'实验'}}],'1').map(x=>x.text.content).join(''),'1. 实验');
+ for(const title of ['3.1·2. 实验','3.1 · 2. 实验']) {
+  assert.equal(numberedTitle([{text:{content:title}}],'3.1·3').map(x=>x.text.content).join(''),'3.1·3. 实验');
+ }
 });
 test('重编遇并发标题变化不写；只用当前页面ETag写标题',async()=>{
  let storedTitle='9. 实验';const writes=[];const p={load:async()=>({databaseId:'db',...graph([['a','9']],[]),nodes:[{id:'a',number:'9',title:storedTitle}]}),cache:new Map(),invalidate:()=>{},api:{request:async(method,path,body,rev)=>{
@@ -30,7 +52,7 @@ test('重编遇并发标题变化不写；只用当前页面ETag写标题',async
 });
 
 test('部分写入失败不改变后续顺序；多组并行分支编号不重复',()=>{
- const g=graph([['a','9'],['b','2'],['c','5']],[]);const before=stageNumbers(g);
+ const g=graph([['a','9'],['b','2'],['c','5']],[['a','b'],['b','c']]);const before=stageNumbers(g);
  g.nodes[0].number=before.get('a');assert.deepEqual(stageNumbers(g),before);
  const nested=graph([['a','1'],['b','2'],['c','3'],['d','4'],['e','5'],['f','6'],['g','7']],[['a','b'],['a','c'],['b','d'],['b','e'],['c','f'],['c','g']]);
  const codes=[...stageNumbers(nested).values()];assert.equal(new Set(codes).size,codes.length);
