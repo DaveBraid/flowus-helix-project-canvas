@@ -64,7 +64,7 @@ const ExperimentNode = memo(function ExperimentNode({ id, data, selected }) {
   const suppressClick = useRef(false);
   const { Icon, tone } = statusAppearance(data.status);
   const [branchOrStage, stage] = String(data.number ?? '').split('·');
-  const stageLabel = stage ? `分支 ${branchOrStage}，阶段 ${stage}` : `阶段 ${branchOrStage || '—'}`;
+  const stageLabel = stage ? `分支 ${branchOrStage} ｜ 阶段 ${stage}` : `阶段 ${branchOrStage || '—'}`;
   const title = data.number ? data.title.replace(new RegExp(`^${data.number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[.]?\\s+`), '') : data.title;
   return <article className={`experiment ${selected ? 'selected' : ''} ${data.dimmed ? 'lineage-dimmed' : ''}`}>
     <Handle type="target" position={Position.Left} isConnectable={false}/>
