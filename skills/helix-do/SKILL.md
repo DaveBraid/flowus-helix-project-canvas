@@ -2,7 +2,7 @@
 name: helix-do
 description: 接手 FlowUs 中由 Helix Project 管理的研究阶段，读取项目资料和附件、理解阶段图与上游进展，按人工给出的意图执行已授权实践，整理可追溯的实验结果和结论。适用于指定 Project 或 Stage 的接手、推进、建议和结果记录。
 metadata:
-  version: "1.2.3"
+  version: "1.2.4"
   display-name: "Helix Do"
   language: zh-CN
 ---
