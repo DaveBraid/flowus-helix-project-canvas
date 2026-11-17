@@ -28,10 +28,30 @@ test('主干单独编号，分支推进保留路径，子分岔新增层级并�
  g.nodes.reverse().forEach(node=>{node.number=numbers.get(node.id)});
  assert.deepEqual(stageNumbers(g),numbers);
 });
-test('未确认编号规则的多起点和合流停止重编',()=>{
- assert.throws(()=>stageNumbers(graph([['a','1'],['b','2']],[])),/多起点或合流/);
- const merge=graph([['a','1'],['b','2'],['c','3'],['d','4']],[['a','b'],['a','c'],['b','d'],['c','d']]);
- assert.throws(()=>stageNumbers(merge),/多起点或合流/);
+test('多个独立起点停止重编',()=>{
+ assert.throws(()=>stageNumbers(graph([['a','1'],['b','2']],[])),/多起点/);
+});
+test('四条子分支合流回到共同分支，后续分叉沿用下一组编号',()=>{
+ const names = ['root','other','online','design','a','b','c','d','review','next1','next2','wrap'];
+ const g = graph(names.map((id, i) => [id, String(i+1)]), [
+  ['root','other'], ['root','online'], ['online','design'],
+  ...['a','b','c','d'].flatMap(id=>[['design',id],[id,'review']]),
+  ['review','next1'], ['review','next2'], ['next1','wrap'], ['next2','wrap'], ['other','wrap']
+ ]);
+ const expected = {
+  root:'1', other:'1·1', online:'2·1', design:'2·2', a:'2.1·1', b:'2.2·1', c:'2.3·1', d:'2.4·1',
+  review:'2·3', next1:'2.5·1', next2:'2.6·1', wrap:'2'
+ };
+ const numbers = stageNumbers(g);
+ assert.deepEqual(Object.fromEntries(numbers), expected);
+ assert.equal(new Set(numbers.values()).size, names.length);
+ g.nodes.reverse();
+ g.edges.reverse();
+ assert.deepEqual(stageNumbers(g), numbers);
+});
+test('合流的直接依赖没有把同一条推进线误判为分支',()=>{
+ const g = graph([['a','1'],['b','2'],['c','3']],[['a','b'],['a','c'],['b','c']]);
+ assert.deepEqual(Object.fromEntries(stageNumbers(g)), {a:'1',b:'2',c:'3'});
 });
 test('标题前缀分片、1a和无编号标题；正文格式保留',()=>{
  const title=[{type:'text',text:{content:'1'},plain_text:'1'},{type:'text',text:{content:'a. 实验'},plain_text:'a. 实验',annotations:{bold:true}}];

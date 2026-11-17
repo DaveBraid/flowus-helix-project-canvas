@@ -2,6 +2,17 @@ import { ServiceError, plain, alive } from './flowus.mjs';
 
 const prefix = /^\d+(?:\.\d+)*(?:[ \t]*·[ \t]*\d+|[a-z])?\.?\s+/i;
 
+/** 合流回到各来源共有的最深分支，按路径段比较，避免把 2.1 和 2.10 当成同一分支。 */
+function commonBranch(branches) {
+  const shared = branches[0].split('.');
+  for (const branch of branches.slice(1)) {
+    const parts = branch.split('.');
+    const difference = shared.findIndex((part, index) => part !== parts[index]);
+    if (difference !== -1) shared.length = difference;
+  }
+  return shared.join('.');
+}
+
 /** 按来源关系计算分支路径与阶段序号。显式保留旧规则的项目继续使用 DAG 编号。 */
 export function stageNumbers({ nodes, edges, legacyNumbering = false }) {
   // 用创建时间和页面 ID 固定同级次序，重编后的标题不参与排序。
@@ -28,29 +39,32 @@ export function stageNumbers({ nodes, edges, legacyNumbering = false }) {
   }
   if (topo.length !== nodes.length) throw new ServiceError(409, '实验关系存在循环，未自动重编编号');
   if (legacyNumbering) return legacyStageNumbers(topo, incoming, outgoing, compare);
-  if (roots.length > 1 || [...incoming.values()].some(sources => sources.length > 1)) {
-    throw new ServiceError(409, '多起点或合流的分支编号规则尚未确认');
-  }
+  if (roots.length > 1) throw new ServiceError(409, '多起点的分支编号规则尚未确认');
 
   const numbers = new Map();
   const paths = new Map();
-  for (const targets of outgoing.values()) if (targets.length > 1) targets.sort(compare);
+  const stages = new Map();
+  const starts = new Map();
+  const branchCounts = new Map();
   for (const id of topo) {
-    const [source] = incoming.get(id);
-    let branch = '', stage = 1;
-    if (source) {
-      const parent = paths.get(source);
-      const siblings = outgoing.get(source);
-      branch = parent.branch;
-      if (siblings.length > 1) {
-        const index = siblings.indexOf(id) + 1;
-        branch = branch ? branch + '.' + index : String(index);
-      } else {
-        stage = parent.stage + 1;
-      }
-    }
-    paths.set(id, { branch, stage });
+    const sources = incoming.get(id);
+    let branch = '';
+    if (sources.length === 1) branch = starts.get(id) ?? paths.get(sources[0]);
+    if (sources.length > 1) branch = commonBranch(sources.map(source => paths.get(source)));
+    const stage = (stages.get(branch) || 0) + 1;
+    stages.set(branch, stage);
+    paths.set(id, branch);
     numbers.set(id, branch ? branch + '·' + stage : String(stage));
+
+    // 流入合流节点的边不占分支号。同一分支先合流再分叉时，子分支号接着分配。
+    const children = outgoing.get(id).filter(target => incoming.get(target).length === 1);
+    if (children.length < 2) continue;
+    const used = branchCounts.get(branch) || 0;
+    children.sort(compare).forEach((target, index) => {
+      const suffix = String(used + index + 1);
+      starts.set(target, branch ? branch + '.' + suffix : suffix);
+    });
+    branchCounts.set(branch, used + children.length);
   }
   return numbers;
 }

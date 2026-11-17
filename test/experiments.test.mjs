@@ -110,16 +110,26 @@ test('同一请求并发和成功重试不重复创建，改变内容409', async
   await projects.createExperiment('test', input); assert.equal(calls.filter(c => c.method === 'POST').length, 1);
   await assert.rejects(projects.createExperiment('test', { ...input, title: '不同内容' }), { status: 409 });
 });
-test('分支编号用于正常新建，未约定编号的来源关系在写入前拒绝', async () => {
+test('分支推进编号用于正常新建，独立新起点在写入前拒绝', async () => {
   const f = fixture();
   f.graph.legacyNumbering = false;
   f.graph.edges.push({ source: a, target: c });
-  await assert.rejects(f.projects.createExperiment('test', input), /多起点或合流/);
-  await assert.rejects(f.projects.updateExperiment('test', c, { sourceIds: [a, b], revision }), /多起点或合流/);
+  await assert.rejects(f.projects.createExperiment('test', { ...input, sourceIds: [] }), /多起点/);
   assert.ok(f.calls.every(call => !['POST', 'PATCH'].includes(call.method)));
   await f.projects.createExperiment('test', { ...input, title: '后续实验', sourceIds: [b] });
   const title = save(f.calls).body.properties.实验内容.title;
   assert.equal(title[0].plain_text, '1·2. 后续实验');
+});
+test('新编号的合流可在正常创建入口保存各来源和引述', async () => {
+  const f = fixture();
+  f.graph.legacyNumbering = false;
+  f.graph.edges.push({ source: a, target: c });
+  f.bodies.set(c, [heading('下一阶段聚焦问题'), paragraph('C 分支聚焦')]);
+  await f.projects.createExperiment('test', { ...input, sourceIds: [c,b] });
+  const fields = save(f.calls).body.properties;
+  assert.equal(fields.实验内容.title[0].plain_text, '2. 合并后的实验');
+  assert.deepEqual(fields.来源实验.relation, [{id:b},{id:c}]);
+  assert.equal(append(f.calls).body.children.length, 2);
 });
 test('复制回执丢失后按临时标题恢复同一副本；简写复用后禁止重放', async () => {
   const { projects, calls, failPost, moveProject } = fixture(); failPost('after');
