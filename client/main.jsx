@@ -387,7 +387,10 @@ function Canvas({ session, slug, onExpired, colorScheme }) {
     } catch (failure) {
       if (failure.status === 401) { onExpired(); return; }
       if (failure.status === 409) throw new Error(`${failure.message} 请关闭此窗口并刷新后重试；本次输入未提交。`);
-      if (submitted && type === 'create' && (!failure.status || failure.status >= 500)) throw Object.assign(new Error('新增结果尚未确认。请保留此窗口并重试同一请求，避免重复新增。'), { retrySameRequest: failure.retrySameRequest !== false });
+      if (submitted && type === 'create' && (!failure.status || failure.status >= 500)) {
+        const message = failure.retrySameRequest === true ? failure.message : '新增结果尚未确认。请保留此窗口并重试同一请求，避免重复新增。';
+        throw Object.assign(new Error(message), { retrySameRequest: failure.retrySameRequest !== false });
+      }
       throw failure;
     } finally { mutationRef.current = false; }
   }

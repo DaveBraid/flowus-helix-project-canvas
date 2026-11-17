@@ -112,7 +112,37 @@ function titleField(db) {
 }
 export const pageRevision = page => typeof page?.last_edited_time === 'string' ? `W/"${page.last_edited_time}"` : null; // 官方弱 ETag 以 last_edited_time 生成。
 
-/** 实验写入只操作当前项目实验表；创建正文一次提交，按官方幂等键重试。 */
+const pageTitle = page => plain(Object.values(page.properties ?? {}).find(p => p.type === 'title')?.title);
+
+/** 仅识别 Helix 尚未写完的原生模板副本，避免临时记录参与编号。 */
+export function pendingExperimentTitle(page) {
+  const title = pageTitle(page);
+  return /^Helix 新建中 [0-9a-f]{64}$/.test(title) ? title : '';
+}
+
+/** 确认写回后的标题、关联与状态，避免把不完整回执当成完成。 */
+function matchesProperties(page, properties) {
+  return Object.entries(properties).every(([name, expected]) => {
+    const actual = page.properties?.[name];
+    if (actual?.type !== expected.type) return false;
+    if (expected.type === 'title') return plain(actual.title) === plain(expected.title);
+    if (expected.type === 'select') return actual.select?.name === expected.select?.name;
+    return Array.isArray(actual.relation) && !actual.has_more && !actual.next_cursor
+      && JSON.stringify(actual.relation.map(item => item.id).sort()) === JSON.stringify(expected.relation.map(item => item.id).sort());
+  });
+}
+
+/** 比较生成的来源标签和链接，识别已写入的引述批次。 */
+function matchesQuotes(blocks, quotes) {
+  return Array.isArray(blocks) && blocks.length === quotes.length && quotes.every((quote, index) => {
+    const actual = blocks[index];
+    const expected = quote.quote.rich_text[0];
+    return actual?.type === 'quote' && alive(actual) && plain(actual.quote?.rich_text) === expected.plain_text
+      && actual.quote?.rich_text?.[0]?.text?.link?.url === expected.href;
+  });
+}
+
+/** 实验写入只操作当前项目实验表；原生复制保留 FlowUs 页面显示设置。 */
 export class Experiments {
   constructor(projects, templateId) { this.projects = projects; this.templateId = templateId; this.creates = new Map(); }
   /** 按模板版本复用原生正文；输入无，输出独立副本，修改模板后自动重读。 */
@@ -135,6 +165,81 @@ export class Experiments {
     this.templatePending = pending;
     try { return structuredClone(await pending); } finally { if (this.templatePending === pending) this.templatePending = null; }
   }
+
+  /** 读取已复制的记录并核对表归属和当前版本，防止写到错误页面。 */
+  async readCopy(entry) {
+    const result = await this.projects.api.request('GET', '/pages/' + entry.copyId);
+    if (result.data?.id !== entry.copyId || !alive(result.data) || result.data.parent?.database_id !== entry.databaseId || !result.etag) {
+      throw new ServiceError(503, '无法确认模板副本的位置和版本，请在 FlowUs 检查该记录。');
+    }
+    return result;
+  }
+
+  /** 在副本的聚焦标题后一次插入全部来源；响应丢失时只认回读结果。 */
+  async appendQuotes(entry) {
+    const { quotes } = entry.plan;
+    const api = this.projects.api;
+    const path = '/blocks/' + entry.copyId + '/children';
+    const blocks = (await api.all('GET', path)).filter(alive);
+    const { start } = section(blocks, ['本阶段问题聚焦', '本轮聚焦问题']);
+    const after = blocks[start].id;
+    const until = start + 1 + quotes.length;
+    const visible = blocks.slice(start + 1, until);
+    if (entry.quoteAttempt) {
+      if (entry.quoteAttempt.after !== after || (blocks[until]?.id ?? null) !== entry.quoteAttempt.next
+          || !matchesQuotes(visible, quotes)) {
+        throw new ServiceError(503, '来源引述的写入结果未确认。请在 FlowUs 核对该副本。');
+      }
+    } else if (!entry.recoveredCopy || !matchesQuotes(visible, quotes)) {
+      entry.quoteAttempt = { after, next: blocks[start + 1]?.id ?? null };
+      const { data } = await api.request('PATCH', path, { after, children: quotes });
+      if (!matchesQuotes(data?.results, quotes)) {
+        throw new ServiceError(503, '来源引述尚未确认。请在本窗口重试核对。');
+      }
+    }
+    entry.quotesApplied = true;
+  }
+
+  /** 按同一请求续接已建副本；确认属性和引述后才交付可见实验。 */
+  async finishCopy(entry, copies) {
+    const api = this.projects.api;
+    const { properties, quotes } = entry.plan;
+    if (!entry.copyId) {
+      const matched = copies.filter(copy => copy.title === entry.marker);
+      if (matched.length === 1) {
+        entry.attempted = true;
+        entry.copyId = matched[0].id;
+        entry.recoveredCopy = true;
+      } else if (entry.attempted || matched.length > 1) {
+        throw new ServiceError(503, '请在 FlowUs 检查实验表。保留此窗口重试可再次核对。');
+      } else {
+        entry.attempted = true; // 原生复制没有幂等键，未确认时不得再次复制。
+        const { data } = await api.request('POST', '/pages/' + this.templateId + '/duplicate',
+          { parent_id: entry.databaseId, title: entry.marker });
+        if (!uuid(data?.id) || data.id === this.templateId || data.duplicated_from !== this.templateId) {
+          throw new ServiceError(503, '复制回执不完整，重试时将核对实验表。');
+        }
+        entry.copyId = data.id;
+      }
+    }
+
+    let current = await this.readCopy(entry);
+    if (pageTitle(current.data) !== entry.marker) {
+      if ((entry.quotesApplied || !quotes.length) && matchesProperties(current.data, properties)) return current;
+      throw new ServiceError(503, '副本的标题已经变化，请在 FlowUs 确认该记录。');
+    }
+    if (quotes.length && !entry.quotesApplied) {
+      await this.appendQuotes(entry);
+      current = await this.readCopy(entry); // 追加正文后重新取得页面版本，避免覆盖外部修改。
+      if (pageTitle(current.data) !== entry.marker) throw new ServiceError(503, '副本在写入引述期间已改名，请在 FlowUs 检查。');
+    }
+    const result = await api.request('PATCH', '/pages/' + entry.copyId, { properties }, current.etag);
+    if (result.data?.id !== entry.copyId || result.data.parent?.database_id !== entry.databaseId || !matchesProperties(result.data, properties)) {
+      throw new ServiceError(503, '实验属性的保存结果尚未确认。请在本窗口重试核对。');
+    }
+    return result;
+  }
+
   async create(slug, input) {
     if (!input || typeof input !== 'object' || Object.keys(input).some(key => !['title', 'sourceIds', 'requestId'].includes(key))) throw new ServiceError(400, '新增实验参数无效');
     const title = titleValue(input.title); const ids = sourceValues(input.sourceIds);
@@ -159,7 +264,7 @@ export class Experiments {
       }
       if (entry.result) { const { graphPatch, ...result } = entry.result; return result; } // 重放不能返回旧图快照。
       const api = this.projects.api;
-      if (!entry.body) {
+      if (!entry.plan) {
         const graph = await this.projects.load(slug, { forCreate: true });
         const pendingId = 'pending:' + input.requestId;
         const edges = validateSources(graph, ids, pendingId);
@@ -181,27 +286,28 @@ export class Experiments {
         }
         const template = await this.template(); // 提交时仍向 FlowUs 核对版本；命中缓存只需一次请求。
         if (budget.count + template.count > 2000) throw new ServiceError(413, '模板及引用正文超过 2000 块，未创建实验');
-        const children = template.children;
-        children.splice(template.start + 1, 0, ...quotes);
-        if (children.length > 100) throw new ServiceError(413, '模板与来源引用合计超过 100 个顶层块，未创建实验');
+        if (template.children.length + quotes.length > 100) throw new ServiceError(413, '模板与来源引用合计超过 100 个顶层块，未创建实验');
         const properties = { [titleField(db)]: { type: 'title', title: [richText(`${number}. ${title}`)] }, 来源实验: { type: 'relation', relation: ids.map(id => ({ id })) } };
         if (db.properties?.状态?.select?.options?.some(option => option.name === '计划中')) properties.状态 = { type: 'select', select: { name: '计划中' } };
         entry.graph = graph;
         entry.projectId = graph.project.id; entry.databaseId = graph.databaseId;
-        entry.body = { parent: { database_id: graph.databaseId }, properties, children };
-        if (Buffer.byteLength(JSON.stringify(entry.body)) > 1024 * 1024) { delete entry.body; throw new ServiceError(413, '新实验正文超过 1 MB，未创建实验'); }
-        entry.idempotencyKey = createHash('sha256').update(`helix-create:${graph.project.id}:${input.requestId}`).digest('hex');
+        if (Buffer.byteLength(JSON.stringify({ properties, children: [...template.children, ...quotes] })) > 1024 * 1024) {
+          throw new ServiceError(413, '新实验正文超过 1 MB，未创建实验');
+        }
+        entry.plan = { properties, quotes };
+        entry.marker = 'Helix 新建中 ' + createHash('sha256')
+          .update(['helix-create', graph.project.id, input.requestId].join(':')).digest('hex');
       }
+      let copies = entry.graph?.pendingCopies ?? [];
       if (entry.attempted) {
-        const latest = await this.projects.load(slug);
+        const latest = await this.projects.load(slug, { forCreate: true });
         if (latest.project.id !== entry.projectId || latest.databaseId !== entry.databaseId) throw new ServiceError(409, '项目或实验表已变化，禁止重放原创建请求');
         validateSources(latest, ids);
+        copies = latest.pendingCopies ?? [];
         delete entry.graph; // 未确认重试不复用旧图，交由完整协调确认。
       }
-      entry.attempted = true;
       try {
-        const { data, etag } = await api.request('POST', '/pages', entry.body, undefined, entry.idempotencyKey);
-        if (!uuid(data?.id) || (data.parent?.database_id && data.parent.database_id !== entry.databaseId)) throw new ServiceError(503, '创建响应不完整');
+        const { data, etag } = await this.finishCopy(entry, copies);
         entry.result = { nodeId: data.id, revision: etag || pageRevision(data) };
         // 仅完整真实响应且全图编号无需改写时，省去重复整图读取。
         const props = data.properties;
@@ -214,12 +320,14 @@ export class Experiments {
           const numbers = stageNumbers(patch);
           if (JSON.stringify(expectedSources) === JSON.stringify(ids) && patch.nodes.every(n => n.title.startsWith(`${numbers.get(n.id)}. `) && n.number === numbers.get(n.id))) entry.result.graphPatch = patch;
         }
-        delete entry.graph; delete entry.body;
+        delete entry.graph; delete entry.plan;
         this.projects.invalidate(slug); return entry.result;
       } catch (error) {
         this.projects.invalidate(slug);
-        if (error.status === 409) throw error;
-        throw new ServiceError(503, '新增实验结果尚未确认，请保留同一请求重试，勿换请求 ID 重复创建', { retrySameRequest: true, requestId: input.requestId });
+        const message = entry.copyId
+          ? '实验页面已复制。' + (error instanceof ServiceError ? error.message : '请保留此窗口重试确认保存。')
+          : '模板复制尚未确认。' + (error instanceof ServiceError ? error.message : '请保留此窗口重试核对。');
+        throw new ServiceError(503, message, { retrySameRequest: true, requestId: input.requestId });
       }
     }).catch(error => { if (!entry.attempted && this.creates.get(key) === entry) this.creates.delete(key); throw error; });
   }

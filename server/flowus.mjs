@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { Experiments, pageRevision } from './experiments.mjs';
+import { Experiments, pageRevision, pendingExperimentTitle } from './experiments.mjs';
 
 export class ServiceError extends Error {
   constructor(status, message, details) { super(message); this.status = status; this.details = details; }
@@ -77,7 +77,8 @@ export class FlowUs {
 
 /** 将实验关系转换成图；输入完整记录，输出节点与边，不推测编号关系。 */
 export function graphRecords(records) {
-  const current = records.filter(alive); const ids = new Set(current.map(r => r.id));
+  const current = records.filter(record => alive(record) && !pendingExperimentTitle(record));
+  const ids = new Set(current.map(r => r.id));
   const nodes = current.map(record => {
     const props = record.properties || {};
     const title = plain(Object.values(props).find(p => p.type === 'title')?.title) || '未命名实验';
@@ -165,7 +166,10 @@ export class Projects {
     const { nodes, edges, missingRelations } = graphRecords(records);
     const legacyNumbering = this.legacyNumberingIds.has(page.id);
     // 创建只需真实归属、关系和表结构，不读取无关的画布布局属性。
-    if (forCreate) return { project: { id: page.id }, databaseId: db.id, databaseSchema: db, nodes, edges, missingRelations, legacyNumbering };
+    if (forCreate) {
+      const pendingCopies = records.filter(alive).map(record => ({ id: record.id, title: pendingExperimentTitle(record) })).filter(record => record.title);
+      return { project: { id: page.id }, databaseId: db.id, databaseSchema: db, nodes, edges, missingRelations, legacyNumbering, pendingCopies };
+    }
     let layoutProperty = property(page, this.layoutField);
     if (!layoutProperty || layoutProperty.type !== 'rich_text') throw new ServiceError(409, '项目缺少文本类型的 Canvas 状态属性');
     if (layoutProperty.rich_text?.length || layoutProperty.has_more) {

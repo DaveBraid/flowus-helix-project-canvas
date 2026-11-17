@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Projects, FlowUs, ServiceError } from '../server/flowus.mjs';
-import { richText } from '../server/experiments.mjs';
+import { pendingExperimentTitle, richText } from '../server/experiments.mjs';
 
 const ids = Array.from({ length: 8 }, (_, i) => `${i + 1}`.repeat(8) + '-1111-4111-8111-' + `${i + 1}`.repeat(12));
 const [projectId, dbId, templateId, a, b, c, createdId, foreignId] = ids;
@@ -9,7 +9,7 @@ const time = '2026-10-26T01:00:00.000Z'; const revision = `W/"${time}"`;
 const heading = (text, n = 1) => ({ id: `heading-${text}`, type: `heading_${n}`, [`heading_${n}`]: { rich_text: [richText(text)], color: 'default' } });
 const paragraph = text => ({ id: text, type: 'paragraph', paragraph: { rich_text: [richText(text)], color: 'default' } });
 function fixture() {
-  const calls = []; let postFailures = 0; let currentProject = projectId;
+  const calls = []; let postFailure; let appendResponseLost = false; let currentProject = projectId;
   const graph = { project: { id: projectId }, databaseId: dbId, legacyNumbering: true, nodes: [a, b, c].map((id, i) => ({ id, title: `实验 ${i}`, number: `${i + 1}`, revision, sourceIds: [] })), edges: [{ source: a, target: b }] };
   const db = { id: dbId, properties: { 实验内容: { type: 'title' }, 来源实验: { type: 'relation', relation: { database_id: dbId } }, 状态: { type: 'select', select: { options: [{ name: '计划中' }, { name: '进行中' }] } }, 编号: { type: 'formula' } } };
   const template = [heading('本阶段问题聚焦'), heading('计划行动'), { type: 'to_do', to_do: { rich_text: [], checked: false } }, heading('下一阶段聚焦问题')];
@@ -28,36 +28,66 @@ function fixture() {
       calls.push({ method, path, body: structuredClone(body), etag, idempotencyKey });
       if (method === 'GET' && path === `/databases/${dbId}`) return { data: structuredClone(db) };
       if (method === 'GET' && path.startsWith('/pages/')) return { data: structuredClone(pages.get(path.split('/').at(-1))), etag: revision };
-      if (method === 'POST' && path === '/pages') {
-        if (postFailures-- > 0) throw new ServiceError(503, 'Connection lost');
-        return { data: { id: createdId, parent: { database_id: dbId }, last_edited_time: time } };
+      if (method === 'POST' && path === '/pages/' + templateId + '/duplicate') {
+        if (postFailure === 'before') throw new ServiceError(503, 'Connection lost before receipt');
+        pages.set(createdId, { id: createdId, parent: { database_id: dbId }, last_edited_time: time, created_time: time,
+          properties: { 实验内容: { type: 'title', title: [richText(body.title)] } } });
+        bodies.set(createdId, structuredClone(template).map((block, index) => ({ ...block, id: 'copy-' + index })));
+        if (postFailure === 'after') throw new ServiceError(503, 'Duplicate response lost');
+        return { data: { id: createdId, duplicated_from: templateId } };
+      }
+      if (method === 'PATCH' && path === '/blocks/' + createdId + '/children') {
+        const blocks = bodies.get(createdId);
+        const after = blocks.findIndex(block => block.id === body.after);
+        assert.notEqual(after, -1);
+        const added = body.children.map((block, index) => ({ ...structuredClone(block), id: 'quote-' + index }));
+        blocks.splice(after + 1, 0, ...added);
+        if (appendResponseLost) throw new ServiceError(503, 'Append response lost');
+        return { data: { results: added } };
+      }
+      if (method === 'PATCH' && path === '/pages/' + createdId) {
+        const page = pages.get(createdId);
+        Object.assign(page.properties, structuredClone(body.properties));
+        return { data: structuredClone(page), etag: 'W/"updated"' };
       }
       if (method === 'PATCH' && path.startsWith('/pages/')) return { data: {}, etag: 'W/"updated"' };
       throw new Error(`Unexpected request: ${method} ${path}`);
     },
   };
   const projects = new Projects(api, { templateId });
-  projects.load = async () => ({ ...structuredClone(graph), databaseSchema: structuredClone(db) });
+  projects.load = async () => ({
+    ...structuredClone(graph), databaseSchema: structuredClone(db),
+    pendingCopies: [...pages.values()].map(page => ({ id: page.id, title: pendingExperimentTitle(page) })).filter(copy => copy.title),
+  });
   projects.resolve = async () => ({ id: currentProject });
-  return { projects, calls, graph, template, bodies, pages, db, failPost: () => { postFailures++; }, moveProject: () => { currentProject = foreignId; } };
+  return { projects, calls, graph, template, bodies, pages, db,
+    failPost: (when = 'before') => { postFailure = when; },
+    loseAppendResponse: () => { appendResponseLost = true; },
+    moveProject: () => { currentProject = foreignId; } };
 }
 const input = { title: '合并后的实验', sourceIds: [b, a], requestId: 'create-request-id-0001' };
+const append = calls => calls.find(c => c.method === 'PATCH' && c.path === '/blocks/' + createdId + '/children');
+const save = calls => calls.find(c => c.method === 'PATCH' && c.path === '/pages/' + createdId);
 
-test('创建一次提交模板和全部来源独立quote，只继承指定小节，不写编号公式', async () => {
+test('原生复制模板并把全部来源引述插入副本标题后，最后写关联和状态', async () => {
   const { projects, calls } = fixture();
   const result = await projects.createExperiment('test', input);
   assert.equal(result.nodeId, createdId);
   const posts = calls.filter(call => call.method === 'POST'); assert.equal(posts.length, 1);
-  const body = posts[0].body;
-  assert.equal(body.parent.database_id, dbId); assert.deepEqual(Object.keys(body.properties).sort(), ['实验内容', '来源实验', '状态'].sort());
-  assert.equal(body.children[1].type, 'quote'); assert.equal(body.children[2].type, 'quote');
-  assert.equal(body.children[1].quote.rich_text[0].text.link.url.startsWith(`https://flowus.cn/${a}#`), true);
-  assert.equal(body.children[1].children[0].paragraph.rich_text[0].plain_text, `聚焦-${a}`);
-  assert.equal(body.children[2].children[0].paragraph.rich_text[0].plain_text, `聚焦-${b}`);
+  assert.equal(posts[0].path, '/pages/' + templateId + '/duplicate');
+  assert.equal(posts[0].body.parent_id, dbId);
+  assert.match(posts[0].body.title, /^Helix 新建中 [0-9a-f]{64}$/);
+  const body = append(calls).body;
+  assert.equal(body.after, 'copy-0');
+  assert.deepEqual(body.children.map(child => child.type), ['quote', 'quote']);
+  assert.equal(body.children[0].quote.rich_text[0].text.link.url.startsWith('https://flowus.cn/' + a + '#'), true);
+  assert.equal(body.children[0].children[0].paragraph.rich_text[0].plain_text, '聚焦-' + a);
+  assert.equal(body.children[1].children[0].paragraph.rich_text[0].plain_text, '聚焦-' + b);
   assert.equal(JSON.stringify(body).includes('不继承的旧结果'), false);
   assert.equal(JSON.stringify(body).includes('不继承的附录'), false);
-  assert.equal(Object.hasOwn(body.children[0].heading_1, 'color'), false);
-  assert.match(posts[0].idempotencyKey, /^[0-9a-f]{64}$/);
+  assert.deepEqual(Object.keys(save(calls).body.properties).sort(), ['实验内容', '来源实验', '状态'].sort());
+  assert.equal(save(calls).etag, revision);
+  assert.ok(calls.indexOf(save(calls)) > calls.indexOf(append(calls)));
 });
 test('新建实验继承来源附件和模板媒体，内部文件仅写入稳定引用', async () => {
   const f = fixture();
@@ -69,9 +99,8 @@ test('新建实验继承来源附件和模板媒体，内部文件仅写入稳�
   f.template.push({ type: 'image', image });
 
   await f.projects.createExperiment('test', input);
-  const body = f.calls.find(call => call.method === 'POST').body;
-  assert.deepEqual(body.children[1].children[1].file, { type: 'file', file, caption });
-  assert.deepEqual(body.children.at(-1).image, image);
+  assert.deepEqual(append(f.calls).body.children[0].children[1].file, { type: 'file', file, caption });
+  assert.deepEqual(f.bodies.get(createdId).at(-1).image, image);
 });
 
 test('同一请求并发和成功重试不重复创建，改变内容409', async () => {
@@ -89,16 +118,25 @@ test('分支编号用于正常新建，未约定编号的来源关系在写入�
   await assert.rejects(f.projects.updateExperiment('test', c, { sourceIds: [a, b], revision }), /多起点或合流/);
   assert.ok(f.calls.every(call => !['POST', 'PATCH'].includes(call.method)));
   await f.projects.createExperiment('test', { ...input, title: '后续实验', sourceIds: [b] });
-  const title = f.calls.find(call => call.method === 'POST').body.properties.实验内容.title;
+  const title = save(f.calls).body.properties.实验内容.title;
   assert.equal(title[0].plain_text, '1·2. 后续实验');
 });
-test('未知创建结果保留同一官方key及payload；简写复用后禁止重放', async () => {
-  const { projects, calls, failPost, moveProject } = fixture(); failPost();
+test('复制回执丢失后按临时标题恢复同一副本；简写复用后禁止重放', async () => {
+  const { projects, calls, failPost, moveProject } = fixture(); failPost('after');
   await assert.rejects(projects.createExperiment('test', input), error => error.status === 503 && error.details.retrySameRequest === true);
   await projects.createExperiment('test', input);
-  const posts = calls.filter(c => c.method === 'POST'); assert.equal(posts.length, 2);
-  assert.deepEqual(posts[0].body, posts[1].body); assert.equal(posts[0].idempotencyKey, posts[1].idempotencyKey);
+  assert.equal(calls.filter(c => c.method === 'POST').length, 1);
   moveProject(); await assert.rejects(projects.createExperiment('test', input), { status: 409 });
+});
+test('找不到复制结果时不盲复制；已提交的引述回读确认后不重复追加', async () => {
+  let f = fixture(); f.failPost();
+  for (let i = 0; i < 2; i++) await assert.rejects(f.projects.createExperiment('test', input), { status: 503 });
+  assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
+
+  f = fixture(); f.loseAppendResponse();
+  await assert.rejects(f.projects.createExperiment('test', input), { status: 503 });
+  assert.equal((await f.projects.createExperiment('test', input)).nodeId, createdId);
+  assert.equal(f.calls.filter(c => c.method === 'PATCH' && c.path === '/blocks/' + createdId + '/children').length, 1);
 });
 test('未确认请求重试检查实验表及来源归属', async () => {
   const f = fixture(); f.failPost(); await assert.rejects(f.projects.createExperiment('test', input), { status: 503 });
@@ -118,8 +156,8 @@ test('空来源保留原模板；准备失败允许同key修正但未尝试远�
   const f = fixture(); f.bodies.set(a, [paragraph('没有小节')]);
   await assert.rejects(f.projects.createExperiment('test', input), { status: 409 });
   const result = await f.projects.createExperiment('test', { ...input, sourceIds: [] }); assert.equal(result.nodeId, createdId);
-  const body = f.calls.find(c => c.method === 'POST').body;
-  assert.equal(body.children.length, f.template.length); assert.equal(body.children.some(c => c.type === 'quote'), false);
+  assert.equal(f.bodies.get(createdId).length, f.template.length);
+  assert.equal(append(f.calls), undefined);
 });
 test('编辑只PATCH明确提交的字段并用实验ETag，不改正文、来源或公式', async () => {
   const { projects, calls } = fixture();
@@ -160,12 +198,11 @@ test('FlowUs重试401/429保留官方幂等键', async () => {
   await api.request('POST', '/pages', { children: [] }, undefined, 'stable-key'); assert.equal(headers.length, 2); assert.equal(headers.every(h => h['Idempotency-Key'] === 'stable-key'), true);
 });
 
-test('新建一次写入预计连续编号，不重复读取实验表结构', async () => {
+test('保存新实验时写入预计连续编号，不重复读取实验表结构', async () => {
   const { projects, calls, graph } = fixture();
   graph.nodes.forEach((node,i)=>{node.createdTime=`2026-01-0${i+1}T00:00:00.000Z`;});
   await projects.createExperiment('test', { ...input, sourceIds: [b] });
-  const post=calls.find(c=>c.method==='POST');
-  assert.equal(post.body.properties.实验内容.title[0].text.content,'4. 合并后的实验');
+  assert.equal(save(calls).body.properties.实验内容.title[0].text.content,'4. 合并后的实验');
   assert(!calls.some(c=>c.path===`/databases/${dbId}`));
 });
 
@@ -176,7 +213,7 @@ test('完整创建响应直接返回真实图；编号变化或响应不完整�
     const original = f.projects.api.request;
     f.projects.api.request = async (method, path, body, ...rest) => {
       const result = await original(method, path, body, ...rest);
-      if (method === 'POST' && mode !== 'incomplete') Object.assign(result.data, { properties: body.properties, created_time: '2026-10-26T02:00:00Z' });
+      if (method === 'PATCH' && path === '/pages/' + createdId && mode === 'incomplete') delete result.data.created_time;
       return result;
     };
     const result = await f.projects.createExperiment('test', { ...input, sourceIds: [mode === 'branch' ? a : b] });
