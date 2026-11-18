@@ -112,7 +112,20 @@ export function numberedTitle(title, number) {
     annotations: { bold: false, italic: false, strikethrough: false, underline: false, code: false, text_color: 'default', background_color: 'default' } }, ...rest];
 }
 
-/** 受保护的显式刷新触发重编；逐记录版本校验，失败后可按当前真实数据安全续跑。 */
+/** 由来源边反查每条实验的直接下级，只列出需要写回的记录。 */
+function childLinkChanges(graph) {
+  const changes = new Map();
+  if (!graph.childLinks) return changes;
+  const desired = new Map(graph.nodes.map(node => [node.id, []]));
+  for (const { source, target } of graph.edges) desired.get(source).push(target);
+  for (const [id, children] of desired) {
+    const actual = new Set(graph.childLinks.records[id]);
+    if (actual.size !== children.length || children.some(id => !actual.has(id))) changes.set(id, children);
+  }
+  return changes;
+}
+
+/** 刷新时复核编号与下级导航，合并同页写入并验证版本。 */
 export async function reconcileNumbers(projects, slug) {
   const graph = await projects.load(slug);
   if (graph.missingRelations) {
@@ -125,12 +138,15 @@ export async function reconcileNumbers(projects, slug) {
       if (alive(source) || source.parent?.database_id !== graph.databaseId) throw new ServiceError(409, '存在表外或不可确认的来源，请在 FlowUs 检查后刷新；未重编编号');
     }
   }
-  const numbers = stageNumbers(graph); let changed = 0, confirmed;
+  const numbers = stageNumbers(graph);
+  const childChanges = childLinkChanges(graph);
+  let changed = 0, changedChildren = 0, confirmed;
   try {
     for (const node of graph.nodes) {
       const number = numbers.get(node.id);
-      const expected = `${number}. ${node.title.replace(prefix, '')}`;
-      if (node.title === expected) continue;
+      const changeTitle = node.title !== `${number}. ${node.title.replace(prefix, '')}`;
+      const changeChildren = childChanges.has(node.id);
+      if (!changeTitle && !changeChildren) continue;
       const { data: page, etag } = await projects.api.request('GET', `/pages/${node.id}`);
       const title = Object.entries(page.properties || {}).find(([, p]) => p.type === 'title');
       if (!alive(page) || page.parent?.database_id !== graph.databaseId || !title || plain(title[1].title) !== node.title || !etag) {
@@ -138,19 +154,31 @@ export async function reconcileNumbers(projects, slug) {
       }
       // 关系变化会改变整个编号计划；不能用最新版本掩盖旧计划。
       if (node.revision && page.last_edited_time !== node.revision && etag !== node.revision) throw new ServiceError(409, '实验在重编期间已变化，请刷新后重试');
-      await projects.api.request('PATCH', `/pages/${node.id}`, { properties: { [title[0]]: { type: 'title', title: numberedTitle(title[1].title, number) } } }, etag);
-      changed++;
+      const properties = {};
+      if (changeTitle) properties[title[0]] = { type: 'title', title: numberedTitle(title[1].title, number) };
+      if (changeChildren) {
+        const field = page.properties['下级实验'];
+        if (field?.type !== 'relation' || field.id !== graph.childLinks.propertyId) throw new ServiceError(409, '下级实验属性已变化，请刷新后重试');
+        properties.下级实验 = { type: 'relation', relation: childChanges.get(node.id).map(id => ({ id })) };
+      }
+      await projects.api.request('PATCH', `/pages/${node.id}`, { properties }, etag);
+      if (changeTitle) changed++;
+      if (changeChildren) changedChildren++;
     }
-    confirmed = changed ? await projects.load(slug) : graph;
+    confirmed = changed || changedChildren ? await projects.load(slug) : graph;
     // 多页更新无事务：若期间关系变化，报告需重试，不误报整图已完成。
     const finalNumbers = stageNumbers(confirmed);
-    if (confirmed.nodes.some(n => n.title !== `${finalNumbers.get(n.id)}. ${n.title.replace(prefix, '')}`)) {
+    if (graph.childLinks && confirmed.childLinks?.propertyId !== graph.childLinks.propertyId) {
+      confirmed = undefined;
+      throw new ServiceError(409, '下级实验属性已变化，请刷新后重试');
+    }
+    if (childLinkChanges(confirmed).size || confirmed.nodes.some(n => n.title !== `${finalNumbers.get(n.id)}. ${n.title.replace(prefix, '')}`)) {
       confirmed = undefined;
       throw new ServiceError(409, '关系在重编期间变化，请刷新后继续');
     }
-    return { changed, graph: confirmed };
+    return { changed, ...(changedChildren ? { changedChildren } : {}), graph: confirmed };
   } catch (error) {
-    if (changed) throw new ServiceError(error.status || 503, `已重编 ${changed} 条；${error.message}。再次刷新可继续完成`);
+    if (changed || changedChildren) throw new ServiceError(error.status || 503, `已重编 ${changed} 条，更新 ${changedChildren} 条下级实验。${error.message}。再次刷新可继续完成`);
     throw error;
   } finally {
     projects.invalidate(slug);

@@ -53,6 +53,36 @@ test('合流的直接依赖没有把同一条推进线误判为分支',()=>{
  const g = graph([['a','1'],['b','2'],['c','3']],[['a','b'],['a','c'],['b','c']]);
  assert.deepEqual(Object.fromEntries(stageNumbers(g)), {a:'1',b:'2',c:'3'});
 });
+test('刷新根据多来源关系同步直接下级，只写变更并保留原来源', async () => {
+  const graphState = {
+    ...graph([['a','1'],['b','2'],['c','3'],['d','4']], [['a','b'],['a','c'],['b','d'],['c','d']]),
+    databaseId: 'db',
+    childLinks: { propertyId:'child-field', records:{a:['c'],b:[],c:['d'],d:['a']} },
+  };
+  const titles = stageNumbers(graphState);
+  for (const node of graphState.nodes) node.title = titles.get(node.id) + '. 实验';
+  const writes = [];
+  const projects = { cache:new Map(), ttl:1000, invalidate() {}, load:async()=>structuredClone(graphState),
+    api:{request:async(method, path, body, revision)=>{
+      const id = path.split('/').at(-1);
+      if (method === 'GET') return { etag:'current-version',data:{parent:{database_id:'db'},properties:{
+        标题:{type:'title',title:[{text:{content:graphState.nodes.find(node=>node.id===id).title}}]},
+        下级实验:{id:'child-field',type:'relation',relation:graphState.childLinks.records[id].map(id=>({id}))},
+      }} };
+      assert.equal(revision,'current-version');
+      assert.deepEqual(Object.keys(body.properties),['下级实验']);
+      writes.push(id);
+      graphState.childLinks.records[id] = body.properties.下级实验.relation.map(item=>item.id);
+    }}
+  };
+  const first = await reconcileNumbers(projects,'example');
+  assert.equal(first.changed,0);
+  assert.equal(first.changedChildren,3);
+  assert.deepEqual(first.graph.childLinks.records,{a:['b','c'],b:['d'],c:['d'],d:[]});
+  assert.deepEqual(writes,['a','b','d']);
+  assert.equal((await reconcileNumbers(projects,'example')).graph.edges.length,4);
+  assert.deepEqual(writes,['a','b','d']);
+});
 test('标题前缀分片、1a和无编号标题；正文格式保留',()=>{
  const title=[{type:'text',text:{content:'1'},plain_text:'1'},{type:'text',text:{content:'a. 实验'},plain_text:'a. 实验',annotations:{bold:true}}];
  const result=numberedTitle(title,'2.1');assert.equal(result.map(x=>x.text.content).join(''),'2.1. 实验');assert.equal(result[1].annotations.bold,true);assert.equal(title[1].text.content,'a. 实验');

@@ -311,7 +311,8 @@ export class Experiments {
         entry.result = { nodeId: data.id, revision: etag || pageRevision(data) };
         // 仅完整真实响应且全图编号无需改写时，省去重复整图读取。
         const props = data.properties;
-        if (entry.graph && !entry.graph.missingRelations && alive(data) && data.parent?.database_id === entry.databaseId && data.created_time && pageRevision(data)
+        // 有新的来源时让创建后的常规刷新同时确认下级链接。
+        if (entry.graph && !(entry.graph.syncChildren && ids.length) && !entry.graph.missingRelations && alive(data) && data.parent?.database_id === entry.databaseId && data.created_time && pageRevision(data)
           && Object.values(props || {}).some(p => p.type === 'title') && Array.isArray(props?.来源实验?.relation) && !props.来源实验.has_more) {
           const node = graphRecords([data]).nodes[0];
           const expectedSources = [...node.sourceIds].sort();

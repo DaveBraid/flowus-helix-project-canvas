@@ -153,9 +153,15 @@ export class Projects {
     }
     if (candidates.length !== 1) throw new ServiceError(409, '请保留一个属于本项目、含来源实验自关联的实验表');
     const db = candidates[0];
+    const children = db.properties?.['下级实验'];
+    const sources = db.properties?.['来源实验'];
+    // 原生已配对的字段由 FlowUs 维护。独立的同表字段才由 Helix 反向填充。
+    const syncChildren = children?.type === 'relation' && children.relation?.database_id === db.id
+      && children.id && sources.relation.synced_property_id !== children.id && !children.relation.synced_property_id;
     const records = await this.api.all('POST', `/databases/${db.id}/query`);
-    for (const record of relations ? records : []) {
-      const relation = record.properties?.['来源实验'];
+    const relationFields = syncChildren && !forCreate ? ['来源实验', '下级实验'] : ['来源实验'];
+    for (const record of relations ? records : []) for (const field of relationFields) {
+      const relation = record.properties?.[field];
       if (!relation?.id) throw new ServiceError(503, '实验来源属性缺少标识，无法确认关联完整性');
       // 官方模型直接携带关联数组；长列表保守分页，显式截断或异常结构也补读。
       if (relation.type === 'relation' && Array.isArray(relation.relation) && relation.relation.length < 20 && relation.has_more !== true && !relation.next_cursor && relation.relation.every(item => item && typeof item.id === 'string')) continue;
@@ -168,8 +174,13 @@ export class Projects {
     // 创建只需真实归属、关系和表结构，不读取无关的画布布局属性。
     if (forCreate) {
       const pendingCopies = records.filter(alive).map(record => ({ id: record.id, title: pendingExperimentTitle(record) })).filter(record => record.title);
-      return { project: { id: page.id }, databaseId: db.id, databaseSchema: db, nodes, edges, missingRelations, legacyNumbering, pendingCopies };
+      return { project: { id: page.id }, databaseId: db.id, databaseSchema: db, nodes, edges, missingRelations, legacyNumbering, pendingCopies, syncChildren };
     }
+    const childLinks = relations && syncChildren ? {
+      propertyId: children.id,
+      records: Object.fromEntries(records.map(record =>
+        [record.id, record.properties['下级实验'].relation.map(item => item.id)]))
+    } : undefined;
     let layoutProperty = property(page, this.layoutField);
     if (!layoutProperty || layoutProperty.type !== 'rich_text') throw new ServiceError(409, '项目缺少文本类型的 Canvas 状态属性');
     if (layoutProperty.rich_text?.length || layoutProperty.has_more) {
@@ -192,7 +203,7 @@ export class Projects {
         } else layoutWarning = '画布所属项目或实验表不匹配，未覆盖原数据';
       } catch { layoutWarning = '画布状态格式有误，未覆盖原数据'; }
     }
-    return { project: { id: page.id, title: plain(Object.values(page.properties).find(p => p.type === 'title')?.title), slug }, nodes, edges, statusOptions: (db.properties?.['状态']?.select?.options || []).map(option => option.name), layout, revision: etag, databaseId: db.id, layoutWarning, missingRelations, legacyNumbering };
+    return { project: { id: page.id, title: plain(Object.values(page.properties).find(p => p.type === 'title')?.title), slug }, nodes, edges, statusOptions: (db.properties?.['状态']?.select?.options || []).map(option => option.name), layout, revision: etag, databaseId: db.id, layoutWarning, missingRelations, legacyNumbering, childLinks };
   }
   /** 原位更新同一画布属性；输入坐标和旧版本，输出确认后的持久状态。 */
   async save(slug, { revision, positions, cardColor }) {

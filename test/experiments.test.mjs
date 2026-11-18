@@ -217,8 +217,9 @@ test('保存新实验时写入预计连续编号，不重复读取实验表结�
 });
 
 test('完整创建响应直接返回真实图；编号变化或响应不完整时回退协调', async () => {
-  for (const mode of ['append', 'branch', 'incomplete']) {
+  for (const mode of ['append', 'branch', 'incomplete', 'child-index']) {
     const f = fixture();
+    if (mode === 'child-index') f.graph.syncChildren = true;
     f.graph.nodes = f.graph.nodes.slice(0, 2).map((n, i) => ({ ...n, title: `${i + 1}. 实验`, createdTime: `2026-01-0${i + 1}T00:00:00Z` }));
     const original = f.projects.api.request;
     f.projects.api.request = async (method, path, body, ...rest) => {

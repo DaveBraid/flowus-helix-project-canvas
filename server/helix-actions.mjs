@@ -120,7 +120,7 @@ export class HelixActions {
         const graph = await this.projects.load(slug, { forCreate: true });
         if (!graph.nodes.some(n => n.id === args.experimentId)) throw new ServiceError(403, '实验不在当前实验表');
         const page = await this.target(projectId, args.experimentId, 'page'); expectVersion(page, args.revision);
-        await this.properties(projectId, page.data, args.properties, ['来源实验', '状态', '编号']);
+        await this.properties(projectId, page.data, args.properties, ['来源实验', '下级实验', '状态', '编号']);
         const updated = await this.api.request('PATCH', `/pages/${id(args.experimentId)}`, { properties: args.properties }, args.revision);
         this.projects.invalidate(slug); return { nodeId: args.experimentId, revision: version(updated) };
       });
@@ -185,7 +185,8 @@ export class HelixActions {
           const created = await this.api.request('POST', '/databases', { parent:{page_id:entry.projectId},is_inline:true,title:[richText('实验记录')],properties:{实验内容:{type:'title'},状态:{type:'select',select:{options:[{name:'计划中',color:'purple'},{name:'进行中',color:'orange'},{name:'待记录',color:'blue'},{name:'已完成',color:'green'},{name:'已暂停',color:'pink'},{name:'已终止',color:'grey'}]}},完成日期:{type:'date'},编号:{type:'formula',formula:{expression:'replace(replace(prop("实验内容"), " .*", ""), "[.]$", "")'}}} });
           entry.databaseId = created.data.id;
         }
-        await this.api.request('PATCH', `/databases/${entry.databaseId}`, {properties:{来源实验:{type:'relation',relation:{database_id:entry.databaseId}}}});
+        const selfRelation = { type: 'relation', relation: { database_id: entry.databaseId } };
+        await this.api.request('PATCH', `/databases/${entry.databaseId}`, { properties: { 来源实验: selfRelation, 下级实验: selfRelation } });
         const graph = await this.projects.load(args.slug); return { projectId:entry.projectId,databaseId:entry.databaseId,graph,url:`${this.projects.publicOrigin}/Helix/${encodeURIComponent(args.slug)}` };
       } catch (error) { throw new ServiceError(error.status || 503, `项目页面已创建，初始化未完成：${error.message}`, { projectId:entry.projectId,databaseId:entry.databaseId,requestId,resumeSameRequest:true }); }
     });
