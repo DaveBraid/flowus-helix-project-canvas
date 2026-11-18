@@ -186,7 +186,18 @@ export class HelixActions {
           entry.databaseId = created.data.id;
         }
         const selfRelation = { type: 'relation', relation: { database_id: entry.databaseId } };
-        await this.api.request('PATCH', `/databases/${entry.databaseId}`, { properties: { 来源实验: selfRelation, 下级实验: selfRelation } });
+        const path = `/databases/${entry.databaseId}`;
+        let { data: schema } = await this.api.request('GET', path);
+        if (!schema?.properties?.['来源实验']) {
+          ({ data: schema } = await this.api.request('PATCH', path, { properties: { 来源实验: selfRelation } }));
+        }
+        if (!schema?.properties?.['下级实验']) {
+          const source = schema?.properties?.['来源实验'];
+          if (!source?.id || source.relation?.database_id !== entry.databaseId) throw new ServiceError(409, '未确认来源实验属性，无法配置下级实验');
+          // 传已存在的来源字段 ID，避免 FlowUs 为新关联另生成一个同步列。
+          const relation = { ...selfRelation.relation, type: 'dual_property', synced_property_id: source.id };
+          await this.api.request('PATCH', path, { properties: { 下级实验: { type: 'relation', relation } } });
+        }
         const graph = await this.projects.load(args.slug); return { projectId:entry.projectId,databaseId:entry.databaseId,graph,url:`${this.projects.publicOrigin}/Helix/${encodeURIComponent(args.slug)}` };
       } catch (error) { throw new ServiceError(error.status || 503, `项目页面已创建，初始化未完成：${error.message}`, { projectId:entry.projectId,databaseId:entry.databaseId,requestId,resumeSameRequest:true }); }
     });

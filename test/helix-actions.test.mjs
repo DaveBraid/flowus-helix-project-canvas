@@ -35,6 +35,31 @@ function fixture() {
   return { actions: new HelixActions(projects), projects, records, calls };
 }
 
+test('新项目配置下级实验时引用已确定的来源属性 ID', async () => {
+  const f = fixture();
+  const sourceId = ids.at(-1);
+  const schema = {};
+  f.projects.api.all = async () => [];
+  f.projects.api.request = async (method, path, body) => {
+    if (method === 'GET' && path.endsWith(projectsId)) return { data:{properties:{项目:{type:'title'}}} };
+    if (method === 'POST' && path === '/pages') return { data:{id:projectId} };
+    if (method === 'POST' && path === '/databases') return { data:{id:databaseId} };
+    assert.equal(path, '/databases/' + databaseId);
+    if (method === 'PATCH') {
+      if (body.properties.来源实验) schema.来源实验 = { ...body.properties.来源实验, id:sourceId };
+      if (body.properties.下级实验) {
+        assert.deepEqual(body.properties.下级实验.relation,
+          { database_id:databaseId, type:'dual_property', synced_property_id:sourceId });
+        schema.下级实验 = body.properties.下级实验;
+      }
+    }
+    return { data:{properties:schema} };
+  };
+  const result = await f.actions.createProject({ title:'测试配置', slug:'example', requestId:'verify-child-property' });
+  assert.equal(result.databaseId,databaseId);
+  assert.equal(schema.下级实验.type,'relation');
+});
+
 test('内网凭据仅接受足长秘密的精确 Bearer 值', () => {
   const secret = 's'.repeat(32);
   assert.equal(internalAuthorized(`Bearer ${secret}`, secret), true);
