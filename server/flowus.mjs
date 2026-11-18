@@ -14,6 +14,11 @@ export function secret(name) {
   return process.env[`${name}_FILE`] ? readFileSync(process.env[`${name}_FILE`], 'utf8').trim() : (process.env[name] || '');
 }
 
+const transientReadErrors = new Set([
+  'TimeoutError', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_SOCKET', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE',
+]);
+
 /** 全实例串行限速；输入请求函数，输出限速后的响应。 */
 export class FlowUs {
   constructor({ token, tokenProvider, fetchImpl = fetch, interval = 600, base = 'https://api.flowus.cn' }) {
@@ -21,22 +26,35 @@ export class FlowUs {
     this.tokenProvider = tokenProvider;
     this.queue = Promise.resolve(); this.next = 0;
   }
+  /** 调用 FlowUs 并保留页面版本。只对读取的临时网络错误补发一次。 */
   async request(method, path, body, revision, idempotencyKey) {
+    const readOnly = method === 'GET' || (method === 'POST' && /^\/databases\/[^/]+\/query$/.test(path));
     const task = async () => {
       let token = this.tokenProvider ? await this.tokenProvider.getToken() : this.token;
-      let refreshed = false;
+      let refreshed = false, retriedRead = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         await new Promise(r => setTimeout(r, Math.max(0, this.next - Date.now())));
         this.next = Date.now() + this.interval; // 最多约 100 次/分钟，保留 20 次余量；429 仍退避。
-        let response;
+        const signal = AbortSignal.timeout(retriedRead ? 10000 : 20000);
+        let response, data;
         try {
           response = await this.fetch(`${this.base}/v2${path}`, {
-            method, signal: AbortSignal.timeout(20000),
+            method, signal,
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(revision ? { 'If-Match': revision } : {}), ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           });
-        } catch { throw new ServiceError(503, 'FlowUs 暂时无法连接，请稍后重试'); }
-        if (response.status === 401 && this.tokenProvider && !refreshed) {
+          if (response.ok) data = await response.json();
+        } catch (error) {
+          if (error instanceof SyntaxError) throw error;
+          const cause = signal.aborted ? signal.reason.name : error.cause?.code || error.name;
+          const retry = readOnly && !retriedRead && attempt < 2 && transientReadErrors.has(cause);
+          // 记录接口和异常类型，便于定位慢请求，不记录查询内容或凭据。
+          console.warn('FlowUs request failed', { method, path: path.split('?')[0], cause, retry });
+          if (!retry) throw new ServiceError(503, 'FlowUs 暂时无法连接，请稍后重试');
+          retriedRead = true;
+          continue;
+        }
+        if (response.status === 401 && this.tokenProvider && !refreshed && attempt < 2) {
           token = await this.tokenProvider.getToken(true); refreshed = true;
           continue; // 只让官方 CLI 重验一次，避免两个刷新实现竞争。
         }
@@ -49,7 +67,7 @@ export class FlowUs {
           const status = [403, 404, 409].includes(response.status) ? response.status : 503;
           throw new ServiceError(status, status === 409 ? '数据已被其他窗口修改，请刷新后重试' : [403, 404].includes(status) ? 'FlowUs 内容不存在或无权访问' : 'FlowUs 请求失败，请检查授权或稍后重试');
         }
-        return { data: await response.json(), etag: response.headers.get('etag') };
+        return { data, etag: response.headers.get('etag') };
       }
       throw new ServiceError(503, 'FlowUs 请求过于频繁，请稍后重试');
     };

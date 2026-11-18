@@ -53,6 +53,38 @@ test('HTTP 401 只交官方 OAuth 提供器强制检查一次，并保留真实 
   assert.equal((await api.request('GET', '/pages/project')).etag, 'W/"version"');
   assert.deepEqual(checks, [false, true]);
 });
+test('表结构与记录查询遇到临时超时只补发一次', async () => {
+  const retryCases = [
+    ['GET', '/databases/db', async () => { throw new DOMException('first request timed out', 'TimeoutError'); }],
+    ['POST', '/databases/db/query', async () => new Response(new ReadableStream({
+      start(controller) { controller.error(new DOMException('response body timed out', 'TimeoutError')); },
+    }))],
+  ];
+  for (const [method, path, timedOut] of retryCases) {
+    let calls = 0;
+    const api = new FlowUs({ token: 'test', interval: 0, fetchImpl: async () => {
+      calls++;
+      return calls === 1 ? timedOut() : new Response('{"verified":true}', { headers: { ETag: 'version' } });
+    } });
+    assert.deepEqual(await api.request(method, path), { data: { verified: true }, etag: 'version' });
+    assert.equal(calls, 2);
+  }
+});
+test('连续读取超时后仍失败，写请求遇到网络中断不重发', async () => {
+  for (const [method, path, expectedCalls] of [
+    ['GET', '/databases/db', 2],
+    ['PATCH', '/pages/page', 1],
+    ['POST', '/pages', 1],
+  ]) {
+    let calls = 0;
+    const api = new FlowUs({ token: 'test', interval: 0, fetchImpl: async () => {
+      calls++;
+      throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } });
+    } });
+    await assert.rejects(api.request(method, path), { status: 503 });
+    assert.equal(calls, expectedCalls);
+  }
+});
 test('简写不存在、重复、未启用时失败关闭', async () => {
   let rows = []; const projects = new Projects({ all: async () => rows }, { allowed: ['a'] });
   await assert.rejects(projects.resolve('missing'), { status: 404 });
